@@ -166,8 +166,8 @@ def generate_synthetic_ohlcv(start_date='2024-06-01', num_days=5, seed=None):
             else:
                 spike_idx = np.random.randint(15, minutes_in_day - 15)
             
-            # Spike multiplier between 3x and 5x
-            spike_multiplier = np.random.uniform(3, 5)
+            # Spike multiplier between 6x and 10x (increased from 3-5x)
+            spike_multiplier = np.random.uniform(6, 10)
             
             # Apply spike
             day_volumes[spike_idx] *= spike_multiplier
@@ -219,7 +219,10 @@ if __name__ == "__main__":
     print("Generating synthetic OHLCV data...")
     df = generate_synthetic_ohlcv(start_date='2024-06-03', num_days=5, seed=42)
     
-    print(f"Generated {len(df)} records spanning {len(df.index.date.unique())} trading days")
+    # Convert index.date to list and then get unique values
+    unique_dates = pd.Series([d.date() for d in df.index]).unique()
+    
+    print(f"Generated {len(df)} records spanning {len(unique_dates)} trading days")
     print(f"Date range: {df.index.min()} to {df.index.max()}")
     
     # Save to CSV

@@ -1,4 +1,4 @@
-from src.parse_zst_ohlcv import decompress_zst_file, load_ohlcv_from_jsonl
+from src.parse_zst_ohlcv import decompress_zst_file, load_ohlcv_from_jsonl, parse_dbn_with_databento
 from src.volume_cluster import identify_volume_clusters
 import os
 import subprocess
@@ -9,6 +9,7 @@ import pandas as pd
 import matplotlib.dates as mdates
 from datetime import datetime, timedelta
 import argparse
+import sys
 
 def parse_arguments():
     """Parse command line arguments"""
@@ -47,30 +48,35 @@ def main():
             print("\nStep 1: Using synthetic data (skipping decompression)")
             df = load_ohlcv_from_jsonl(None, use_synthetic=True)
         else:
-            # Decompress ZST file first
-            print("\nStep 1: Decompressing ZST file...")
+            # Attempt to load real ES futures data from the DBN.ZST file
+            print("\nStep 1: Loading real ES futures data...")
+            
             if not os.path.exists(zst_path):
                 print(f"ERROR: ZST file not found at {zst_path}")
                 print("Please ensure the ZST file is in the correct location.")
                 print("Use --use-synthetic flag to use synthetic data instead.")
-                raise FileNotFoundError(f"ZST file not found: {zst_path}")
-                
-            decompress_zst_file(zst_path, jsonl_path)
-    
-            # Check file info
-            print(f"\nDecompressed file info:")
-            print(f"Size: {os.path.getsize(jsonl_path):,} bytes")
-            # Try to determine file type
-            print("File type:")
+                sys.exit(f"File not found: {zst_path}")
+            
             try:
-                file_type = subprocess.check_output(['file', jsonl_path], text=True)
-                print(file_type)
+                # Use Databento SDK to parse the DBN.ZST file directly
+                df = parse_dbn_with_databento(zst_path)
+                
+                # Print information about the loaded data
+                print(f"\nSuccessfully loaded real ES futures data:")
+                print(f"Number of rows: {len(df):,}")
+                print(f"Date range: {df.index.min()} to {df.index.max()}")
+                print(f"Timespan: {(df.index.max() - df.index.min()).days + 1} days")
+                
+                # Save a backup copy of the parsed data
+                backup_path = 'data/es_ohlcv_real.csv'
+                df.to_csv(backup_path)
+                print(f"Saved backup copy to {backup_path}")
+                
             except Exception as e:
-                print(f"Could not determine file type: {e}")
-    
-            # Step 2: Load Data
-            print("\nStep 2: Loading and parsing OHLCV data...")
-            df = load_ohlcv_from_jsonl(jsonl_path, use_synthetic=False)
+                print(f"\nERROR: Failed to load real market data: {e}")
+                print("\nTraceback:")
+                traceback.print_exc()
+                sys.exit("Failed to load real market data. Please check the DBN parser.")
         
         # Verify if this is real or synthetic data
         is_synthetic = 'is_synthetic' in df.columns if not df.empty else False
@@ -364,7 +370,7 @@ def main():
         print(f"\nAn error occurred: {e}")
         print("\nTraceback:")
         traceback.print_exc()
-        print("\nTry running with --use-synthetic flag to use synthetic data instead.")
+        sys.exit(f"Analysis failed: {e}")
 
 if __name__ == "__main__":
     main() 
