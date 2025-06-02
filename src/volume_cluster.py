@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 import os
 import warnings
+from scipy.stats import skew, kurtosis
 
 def identify_volume_clusters(df, volume_multiplier=3.0):
     """
@@ -20,7 +21,8 @@ def identify_volume_clusters(df, volume_multiplier=3.0):
     Returns:
     --------
     DataFrame
-        Pandas DataFrame with information about each volume cluster
+        Pandas DataFrame with information about each volume cluster including
+        skewness and kurtosis metrics
     """
     # Ensure the DataFrame is sorted by time
     df = df.sort_index()
@@ -72,6 +74,38 @@ def identify_volume_clusters(df, volume_multiplier=3.0):
         high_volume_periods.loc[:, 'date'] = date
         high_volume_periods.loc[:, 'threshold'] = threshold
         high_volume_periods.loc[:, 'avg_volume'] = avg_15m_volume
+        
+        # Calculate skewness and kurtosis for each cluster
+        skewness_values = []
+        kurtosis_values = []
+        
+        for cluster_time in high_volume_periods.index:
+            # Get the underlying volume data for this 15-minute period
+            cluster_start = cluster_time
+            cluster_end = cluster_time + pd.Timedelta(minutes=15)
+            
+            # Extract individual minute-level volumes for this cluster period
+            cluster_volumes = day_data[
+                (day_data.index >= cluster_start) & 
+                (day_data.index < cluster_end)
+            ]['volume']
+            
+            # Calculate skewness and kurtosis
+            if len(cluster_volumes) >= 3 and cluster_volumes.std() > 0:
+                # Only calculate if we have enough data points and non-constant data
+                cluster_skew = skew(cluster_volumes)
+                cluster_kurt = kurtosis(cluster_volumes)
+            else:
+                # Set to NaN if insufficient data or constant values
+                cluster_skew = np.nan
+                cluster_kurt = np.nan
+            
+            skewness_values.append(cluster_skew)
+            kurtosis_values.append(cluster_kurt)
+        
+        # Add skewness and kurtosis columns
+        high_volume_periods.loc[:, 'skewness'] = skewness_values
+        high_volume_periods.loc[:, 'kurtosis'] = kurtosis_values
         
         # Add to all clusters
         all_clusters.append(high_volume_periods)
@@ -227,7 +261,7 @@ if __name__ == "__main__":
     if not clusters.empty:
         # Print results
         print(f"\nFound {len(clusters)} volume clusters:")
-        print(clusters[['volume', 'cluster_strength', 'threshold']].head())
+        print(clusters[['volume', 'cluster_strength', 'threshold', 'skewness', 'kurtosis']].head())
         
         # Analyze timing
         print("\nCluster timing analysis:")
