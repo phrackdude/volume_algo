@@ -40,6 +40,49 @@ def parse_dbn_with_databento(file_path):
         # Print columns for debugging
         print(f"Available columns: {df.columns.tolist()}")
         
+        # DEBUG: Print first few rows of raw data to verify column assignments
+        print("\n=== RAW DATA INSPECTION ===")
+        print("First 5 rows of raw DataFrame:")
+        print(df.head())
+        print(f"\nDataFrame shape: {df.shape}")
+        print(f"DataFrame dtypes:\n{df.dtypes}")
+        
+        # DEBUG: Check for any abnormally low values in price columns
+        if 'open' in df.columns and 'high' in df.columns and 'low' in df.columns and 'close' in df.columns:
+            print("\n=== PRICE COLUMN ANALYSIS ===")
+            price_cols = ['open', 'high', 'low', 'close']
+            for col in price_cols:
+                col_data = df[col]
+                print(f"\n{col.upper()} column stats:")
+                print(f"  Min: {col_data.min():.2f}")
+                print(f"  Max: {col_data.max():.2f}")
+                print(f"  Mean: {col_data.mean():.2f}")
+                print(f"  Median: {col_data.median():.2f}")
+                
+                # Check for abnormally low values (< 100 for ES futures)
+                low_values = col_data[col_data < 100]
+                if len(low_values) > 0:
+                    print(f"  ⚠️  WARNING: Found {len(low_values)} values < 100!")
+                    print(f"  Sample low values: {low_values.head(10).tolist()}")
+                
+                # Sample of first 10 values
+                print(f"  First 10 values: {col_data.head(10).tolist()}")
+            
+            # Check OHLC relationship validity
+            print("\n=== OHLC RELATIONSHIP VALIDATION ===")
+            invalid_ohlc = df[(df['low'] > df['high']) | 
+                             (df['open'] < df['low']) | 
+                             (df['open'] > df['high']) |
+                             (df['close'] < df['low']) | 
+                             (df['close'] > df['high'])]
+            
+            if len(invalid_ohlc) > 0:
+                print(f"⚠️  WARNING: Found {len(invalid_ohlc)} rows with invalid OHLC relationships!")
+                print("Sample invalid rows:")
+                print(invalid_ohlc[['open', 'high', 'low', 'close']].head())
+            else:
+                print("✅ All OHLC relationships are valid")
+        
         # Check if DataFrame already has a datetime index
         if isinstance(df.index, pd.DatetimeIndex):
             print("DataFrame already has a datetime index")
@@ -62,6 +105,40 @@ def parse_dbn_with_databento(file_path):
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
             raise ValueError(f"Missing required columns: {missing_columns}")
+        
+        # DEBUG: Verify column assignment order matches expected schema
+        print(f"\n=== COLUMN ASSIGNMENT VERIFICATION ===")
+        print(f"Expected order: ['ts_event', 'open', 'high', 'low', 'close', 'volume']")
+        print(f"Actual columns: {df.columns.tolist()}")
+        print(f"Volume column being used: '{volume_col}'")
+        
+        # FILTER: Remove spread contracts to keep only outright futures contracts
+        if 'symbol' in df.columns:
+            print(f"\n=== FILTERING SPREAD CONTRACTS ===")
+            original_count = len(df)
+            
+            # Identify spread contracts (contain hyphen)
+            spread_mask = df['symbol'].str.contains('-', na=False)
+            spread_count = spread_mask.sum()
+            
+            # Keep only outright contracts (no hyphen in symbol)
+            df = df[~spread_mask].copy()
+            
+            print(f"Original records: {original_count:,}")
+            print(f"Spread contracts removed: {spread_count:,}")
+            print(f"Outright contracts kept: {len(df):,}")
+            
+            # Verify remaining symbols
+            remaining_symbols = df['symbol'].unique()
+            print(f"Remaining symbols: {remaining_symbols}")
+            
+            # Verify price ranges after filtering
+            if len(df) > 0:
+                print(f"Price range after filtering:")
+                print(f"  Open: {df['open'].min():.2f} - {df['open'].max():.2f}")
+                print(f"  High: {df['high'].min():.2f} - {df['high'].max():.2f}")
+                print(f"  Low: {df['low'].min():.2f} - {df['low'].max():.2f}")
+                print(f"  Close: {df['close'].min():.2f} - {df['close'].max():.2f}")
         
         # If we don't have a timestamp column and don't have a datetime index
         if 'ts_event' not in df.columns and not has_datetime_index:
@@ -127,6 +204,11 @@ def parse_dbn_with_databento(file_path):
             'volume': df[volume_col]
         }
         
+        # DEBUG: Print sample of result columns before creating DataFrame
+        print(f"\n=== RESULT COLUMNS SAMPLE ===")
+        for col_name, col_data in result_columns.items():
+            print(f"{col_name}: {col_data.head(3).tolist()}")
+        
         if has_datetime_index:
             # If we already have a datetime index, use it
             result_df = pd.DataFrame(result_columns, index=df.index)
@@ -150,6 +232,21 @@ def parse_dbn_with_databento(file_path):
         
         # Sort by datetime
         result_df = result_df.sort_index()
+        
+        # DEBUG: Final validation of result DataFrame
+        print(f"\n=== FINAL RESULT VALIDATION ===")
+        print(f"Final DataFrame shape: {result_df.shape}")
+        print("Final DataFrame sample:")
+        print(result_df.head())
+        
+        # Check for any remaining low price anomalies
+        low_anomalies = result_df[result_df['low'] < 100]
+        if len(low_anomalies) > 0:
+            print(f"\n⚠️  WARNING: Final DataFrame still contains {len(low_anomalies)} rows with low < 100!")
+            print("Sample anomalies:")
+            print(low_anomalies.head())
+        else:
+            print("\n✅ Final DataFrame has no low price anomalies")
         
         print(f"Successfully parsed {len(result_df)} records from {file_path}")
         print(f"Date range: {result_df.index.min()} to {result_df.index.max()}")

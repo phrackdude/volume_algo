@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 import os
 import warnings
-from scipy.stats import skew, kurtosis
+from scipy.stats import skew, kurtosis, ttest_1samp
 
 def identify_volume_clusters(df, volume_multiplier=3.0):
     """
@@ -78,6 +78,13 @@ def identify_volume_clusters(df, volume_multiplier=3.0):
         # Calculate skewness and kurtosis for each cluster
         skewness_values = []
         kurtosis_values = []
+        modal_prices = []
+        price_deltas = []
+        
+        # Forward return analysis
+        return_15m_values = []
+        return_30m_values = []
+        return_60m_values = []
         
         for cluster_time in high_volume_periods.index:
             # Get the underlying volume data for this 15-minute period
@@ -85,27 +92,110 @@ def identify_volume_clusters(df, volume_multiplier=3.0):
             cluster_end = cluster_time + pd.Timedelta(minutes=15)
             
             # Extract individual minute-level volumes for this cluster period
-            cluster_volumes = day_data[
+            cluster_data = day_data[
                 (day_data.index >= cluster_start) & 
                 (day_data.index < cluster_end)
-            ]['volume']
+            ]
+            
+            cluster_volumes = cluster_data['volume'].values
             
             # Calculate skewness and kurtosis
             if len(cluster_volumes) >= 3 and cluster_volumes.std() > 0:
-                # Only calculate if we have enough data points and non-constant data
-                cluster_skew = skew(cluster_volumes)
-                cluster_kurt = kurtosis(cluster_volumes)
+                cluster_skewness = skew(cluster_volumes)
+                cluster_kurtosis = kurtosis(cluster_volumes)
             else:
-                # Set to NaN if insufficient data or constant values
-                cluster_skew = np.nan
-                cluster_kurt = np.nan
+                cluster_skewness = np.nan
+                cluster_kurtosis = np.nan
             
-            skewness_values.append(cluster_skew)
-            kurtosis_values.append(cluster_kurt)
+            skewness_values.append(cluster_skewness)
+            kurtosis_values.append(cluster_kurtosis)
+            
+            # Modal price calculation
+            if len(cluster_data) > 0:
+                # Use 0.25 tick size for ES futures
+                tick_size = 0.25
+                
+                # Create price bins
+                min_price = cluster_data['close'].min()
+                max_price = cluster_data['close'].max()
+                
+                # Ensure we have a reasonable range
+                if max_price - min_price < tick_size:
+                    # If price range is too small, create bins around the mean price
+                    mean_price = cluster_data['close'].mean()
+                    min_price = mean_price - 2 * tick_size
+                    max_price = mean_price + 2 * tick_size
+                
+                # Create bins
+                bins = np.arange(min_price, max_price + tick_size, tick_size)
+                
+                # Calculate volume per price bin
+                hist, bin_edges = np.histogram(cluster_data['close'], bins=bins, weights=cluster_data['volume'])
+                
+                # Find the bin with maximum volume (modal price)
+                if len(hist) > 0 and hist.max() > 0:
+                    max_volume_idx = np.argmax(hist)
+                    modal_price = (bin_edges[max_volume_idx] + bin_edges[max_volume_idx + 1]) / 2
+                else:
+                    modal_price = cluster_data['close'].mean()
+                
+                # Calculate price delta (modal price - closing price of cluster)
+                cluster_close = cluster_data['close'].iloc[-1]  # Last close in the cluster
+                price_delta = modal_price - cluster_close
+            else:
+                modal_price = np.nan
+                price_delta = np.nan
+                cluster_close = np.nan
+            
+            modal_prices.append(modal_price)
+            price_deltas.append(price_delta)
+            
+            # =================================================================
+            # FORWARD RETURN ANALYSIS
+            # =================================================================
+            
+            # Get the closing price at the end of the cluster (t=0)
+            if len(cluster_data) > 0:
+                t0_close = cluster_data['close'].iloc[-1]  # Last close price in cluster
+                
+                # Calculate forward returns at different horizons
+                forward_returns = {}
+                
+                for horizon_minutes, return_key in [(15, 'return_15m'), (30, 'return_30m'), (60, 'return_60m')]:
+                    # Find the target time
+                    target_time = cluster_end + pd.Timedelta(minutes=horizon_minutes)
+                    
+                    # Look for data at or after the target time
+                    future_data = day_data[day_data.index >= target_time]
+                    
+                    if len(future_data) > 0:
+                        # Use the first available price at or after target time
+                        t_horizon_close = future_data['close'].iloc[0]
+                        
+                        # Calculate return: (close_t+n - close_t) / close_t
+                        forward_return = (t_horizon_close - t0_close) / t0_close
+                        forward_returns[return_key] = forward_return
+                    else:
+                        # Not enough future data (e.g., end of day)
+                        forward_returns[return_key] = np.nan
+                
+            else:
+                # No cluster data available
+                forward_returns = {'return_15m': np.nan, 'return_30m': np.nan, 'return_60m': np.nan}
+            
+            # Store forward returns
+            return_15m_values.append(forward_returns['return_15m'])
+            return_30m_values.append(forward_returns['return_30m'])
+            return_60m_values.append(forward_returns['return_60m'])
         
-        # Add skewness and kurtosis columns
-        high_volume_periods.loc[:, 'skewness'] = skewness_values
-        high_volume_periods.loc[:, 'kurtosis'] = kurtosis_values
+        # Add all metrics to the result DataFrame
+        high_volume_periods['skewness'] = skewness_values
+        high_volume_periods['kurtosis'] = kurtosis_values
+        high_volume_periods['modal_price'] = modal_prices
+        high_volume_periods['price_delta'] = price_deltas
+        high_volume_periods['return_15m'] = return_15m_values
+        high_volume_periods['return_30m'] = return_30m_values
+        high_volume_periods['return_60m'] = return_60m_values
         
         # Add to all clusters
         all_clusters.append(high_volume_periods)
@@ -247,6 +337,161 @@ def analyze_cluster_timing(clusters_df):
         'hour_strength': hour_strength.to_dict()
     }
 
+def analyze_forward_returns(clusters_df):
+    """
+    Analyze forward returns to determine if volume clusters have predictive power.
+    
+    Parameters:
+    -----------
+    clusters_df : DataFrame
+        DataFrame containing volume clusters with forward return columns
+        
+    Returns:
+    --------
+    dict
+        Dictionary containing statistical analysis results
+    """
+    print("\n" + "="*60)
+    print("DIRECTIONAL BIAS ANALYSIS")
+    print("="*60)
+    
+    results = {}
+    return_columns = ['return_15m', 'return_30m', 'return_60m']
+    horizons = ['15-minute', '30-minute', '60-minute']
+    
+    for return_col, horizon in zip(return_columns, horizons):
+        if return_col in clusters_df.columns:
+            # Get non-NaN returns
+            returns = clusters_df[return_col].dropna()
+            
+            if len(returns) > 0:
+                # Basic statistics
+                mean_return = returns.mean()
+                std_return = returns.std()
+                count = len(returns)
+                
+                # Convert to percentage for easier interpretation
+                mean_return_pct = mean_return * 100
+                std_return_pct = std_return * 100
+                
+                # Perform one-sample t-test against zero
+                # H0: mean return = 0 (no directional bias)
+                # H1: mean return ≠ 0 (directional bias exists)
+                if count > 1:
+                    t_stat, p_value = ttest_1samp(returns, 0)
+                    
+                    # Determine significance
+                    is_significant = p_value < 0.05
+                    significance_level = "***" if p_value < 0.001 else "**" if p_value < 0.01 else "*" if p_value < 0.05 else ""
+                    
+                    # Determine direction
+                    direction = "Bullish" if mean_return > 0 else "Bearish" if mean_return < 0 else "Neutral"
+                    
+                    # Store results
+                    results[return_col] = {
+                        'horizon': horizon,
+                        'count': count,
+                        'mean_return': mean_return,
+                        'mean_return_pct': mean_return_pct,
+                        'std_return': std_return,
+                        'std_return_pct': std_return_pct,
+                        't_stat': t_stat,
+                        'p_value': p_value,
+                        'is_significant': is_significant,
+                        'direction': direction,
+                        'significance_stars': significance_level
+                    }
+                    
+                    # Print results
+                    print(f"\n{horizon.upper()} FORWARD RETURNS:")
+                    print(f"  Sample size: {count}")
+                    print(f"  Mean return: {mean_return_pct:+.2f}% {significance_level}")
+                    print(f"  Std deviation: {std_return_pct:.2f}%")
+                    print(f"  Direction: {direction}")
+                    print(f"  t-statistic: {t_stat:.3f}")
+                    print(f"  p-value: {p_value:.4f}")
+                    
+                    if is_significant:
+                        print(f"  ✅ SIGNIFICANT: Volume clusters show {direction.lower()} bias")
+                    else:
+                        print(f"  ❌ NOT SIGNIFICANT: No clear directional bias detected")
+                    
+                    # Additional insights
+                    positive_returns = returns[returns > 0]
+                    negative_returns = returns[returns < 0]
+                    
+                    win_rate = len(positive_returns) / count * 100
+                    
+                    print(f"  Win rate: {win_rate:.1f}% ({len(positive_returns)}/{count})")
+                    
+                    if len(positive_returns) > 0:
+                        avg_win = positive_returns.mean() * 100
+                        print(f"  Average win: +{avg_win:.2f}%")
+                    
+                    if len(negative_returns) > 0:
+                        avg_loss = negative_returns.mean() * 100
+                        print(f"  Average loss: {avg_loss:.2f}%")
+                        
+                else:
+                    print(f"\n{horizon.upper()} FORWARD RETURNS:")
+                    print(f"  Insufficient data for t-test (n={count})")
+                    
+                    results[return_col] = {
+                        'horizon': horizon,
+                        'count': count,
+                        'mean_return': mean_return,
+                        'mean_return_pct': mean_return_pct,
+                        'std_return': std_return,
+                        'std_return_pct': std_return_pct,
+                        't_stat': np.nan,
+                        'p_value': np.nan,
+                        'is_significant': False,
+                        'direction': 'Insufficient data',
+                        'significance_stars': ''
+                    }
+            else:
+                print(f"\n{horizon.upper()} FORWARD RETURNS:")
+                print(f"  No valid data available")
+                
+                results[return_col] = {
+                    'horizon': horizon,
+                    'count': 0,
+                    'mean_return': np.nan,
+                    'mean_return_pct': np.nan,
+                    'std_return': np.nan,
+                    'std_return_pct': np.nan,
+                    't_stat': np.nan,
+                    'p_value': np.nan,
+                    'is_significant': False,
+                    'direction': 'No data',
+                    'significance_stars': ''
+                }
+    
+    # Summary
+    print(f"\n" + "="*60)
+    print("SUMMARY")
+    print("="*60)
+    
+    significant_horizons = [results[col]['horizon'] for col in return_columns 
+                          if col in results and results[col]['is_significant']]
+    
+    if significant_horizons:
+        print(f"📊 Volume clusters show significant directional bias at: {', '.join(significant_horizons)}")
+        
+        # Find the most significant result
+        best_horizon = min([col for col in return_columns if col in results and results[col]['is_significant']], 
+                          key=lambda x: results[x]['p_value'])
+        best_result = results[best_horizon]
+        
+        print(f"🎯 Strongest signal: {best_result['horizon']} with {best_result['mean_return_pct']:+.2f}% average return")
+        print(f"   (p-value: {best_result['p_value']:.4f}, direction: {best_result['direction']})")
+        
+    else:
+        print(f"📊 No statistically significant directional bias detected at any time horizon")
+        print(f"💡 This suggests volume clusters may not be predictive of future price direction")
+    
+    return results
+
 if __name__ == "__main__":
     # Load synthetic data for testing
     from synthetic_data import generate_synthetic_ohlcv
@@ -261,7 +506,10 @@ if __name__ == "__main__":
     if not clusters.empty:
         # Print results
         print(f"\nFound {len(clusters)} volume clusters:")
-        print(clusters[['volume', 'cluster_strength', 'threshold', 'skewness', 'kurtosis']].head())
+        display_columns = ['volume', 'cluster_strength', 'threshold', 'skewness', 'kurtosis', 
+                          'modal_price', 'price_delta', 'return_15m', 'return_30m', 'return_60m']
+        available_columns = [col for col in display_columns if col in clusters.columns]
+        print(clusters[available_columns].head())
         
         # Analyze timing
         print("\nCluster timing analysis:")
@@ -273,6 +521,43 @@ if __name__ == "__main__":
                     print(f"  {k}: {v:.2f}")
             else:
                 print(f"{key}: {value}")
+        
+        # Print modal price analysis summary
+        print(f"\nModal price analysis:")
+        if 'modal_price' in clusters.columns:
+            modal_prices = clusters['modal_price'].dropna()
+            if len(modal_prices) > 0:
+                print(f"  Average modal price: ${modal_prices.mean():.2f}")
+                print(f"  Modal price range: ${modal_prices.min():.2f} - ${modal_prices.max():.2f}")
+        
+        if 'price_delta' in clusters.columns:
+            price_deltas = clusters['price_delta'].dropna()
+            if len(price_deltas) > 0:
+                print(f"  Average price delta: ${price_deltas.mean():.2f}")
+                print(f"  Price delta range: ${price_deltas.min():.2f} - ${price_deltas.max():.2f}")
+        
+        # Perform directional bias analysis
+        return_analysis = analyze_forward_returns(clusters)
+        
+        # Save return analysis summary to CSV
+        if return_analysis:
+            summary_data = []
+            for return_col, stats in return_analysis.items():
+                summary_data.append({
+                    'horizon': stats['horizon'],
+                    'sample_size': stats['count'],
+                    'mean_return_pct': stats['mean_return_pct'],
+                    'std_return_pct': stats['std_return_pct'],
+                    't_statistic': stats['t_stat'],
+                    'p_value': stats['p_value'],
+                    'is_significant': stats['is_significant'],
+                    'direction': stats['direction']
+                })
+            
+            summary_df = pd.DataFrame(summary_data)
+            summary_path = 'data/cluster_return_summary.csv'
+            summary_df.to_csv(summary_path, index=False)
+            print(f"\n📊 Return analysis summary saved to: {summary_path}")
         
         # Plot for each date with clusters
         print("\nCreating plots...")

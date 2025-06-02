@@ -1,5 +1,5 @@
 from src.parse_zst_ohlcv import decompress_zst_file, load_ohlcv_from_jsonl, parse_dbn_with_databento
-from src.volume_cluster import identify_volume_clusters
+from src.volume_cluster import identify_volume_clusters, analyze_forward_returns
 import os
 import subprocess
 import traceback
@@ -116,6 +116,30 @@ def main():
             total_periods = sum(len(day_data.resample('15min')) for _, day_data in df.groupby(df.index.date))
             cluster_percentage = (len(clusters) / total_periods) * 100
             print(f"\nCluster frequency: {cluster_percentage:.2f}% of all 15-minute periods")
+            
+            # Perform directional bias analysis
+            print("\nStep 3.5: Analyzing directional bias...")
+            return_analysis = analyze_forward_returns(clusters)
+            
+            # Save return analysis summary to CSV
+            if return_analysis:
+                summary_data = []
+                for return_col, stats in return_analysis.items():
+                    summary_data.append({
+                        'horizon': stats['horizon'],
+                        'sample_size': stats['count'],
+                        'mean_return_pct': stats['mean_return_pct'],
+                        'std_return_pct': stats['std_return_pct'],
+                        't_statistic': stats['t_stat'],
+                        'p_value': stats['p_value'],
+                        'is_significant': stats['is_significant'],
+                        'direction': stats['direction']
+                    })
+                
+                summary_df = pd.DataFrame(summary_data)
+                summary_path = "data/cluster_return_summary.csv"
+                summary_df.to_csv(summary_path, index=False)
+                print(f"\n📊 Return analysis summary saved to: {summary_path}")
             
             # Save results for inspection
             clusters.to_csv("data/volume_clusters.csv")
