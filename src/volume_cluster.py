@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import matplotlib.pyplot as plt
 import os
 import warnings
-from scipy.stats import skew, kurtosis, ttest_1samp
+from scipy.stats import skew, kurtosis, ttest_1samp, ttest_ind
 
 def identify_volume_clusters(df, volume_multiplier=3.0):
     """
@@ -85,6 +85,10 @@ def identify_volume_clusters(df, volume_multiplier=3.0):
         return_15m_values = []
         return_30m_values = []
         return_60m_values = []
+        
+        # Retest analysis
+        retested_poc_values = []
+        retest_time_values = []
         
         for cluster_time in high_volume_periods.index:
             # Get the underlying volume data for this 15-minute period
@@ -187,6 +191,54 @@ def identify_volume_clusters(df, volume_multiplier=3.0):
             return_15m_values.append(forward_returns['return_15m'])
             return_30m_values.append(forward_returns['return_30m'])
             return_60m_values.append(forward_returns['return_60m'])
+            
+            # =================================================================
+            # RETEST ANALYSIS - Check if modal price is revisited
+            # =================================================================
+            
+            # Only perform retest analysis if we have a valid modal price
+            if not np.isnan(modal_price):
+                # Define retest threshold (±3 ticks for ES futures)
+                retest_threshold = 0.75  # 3 * 0.25 tick size
+                
+                # Define the retest window: from cluster_end + 1 minute to cluster_end + 60 minutes
+                retest_start = cluster_end + pd.Timedelta(minutes=1)
+                retest_end = cluster_end + pd.Timedelta(minutes=60)
+                
+                # Get data in the retest window
+                retest_data = day_data[
+                    (day_data.index >= retest_start) & 
+                    (day_data.index <= retest_end)
+                ]
+                
+                # Check if price revisits modal price within ±threshold
+                retested = False
+                retest_time_minutes = np.nan
+                
+                if len(retest_data) > 0:
+                    # For each minute in the retest window, check if price range overlaps with modal price ±threshold
+                    # Overlap occurs when: low <= modal_price + threshold AND high >= modal_price - threshold
+                    upper_bound = modal_price + retest_threshold
+                    lower_bound = modal_price - retest_threshold
+                    
+                    # Find bars where price range overlaps with the modal price zone
+                    retest_hits = retest_data[
+                        (retest_data['low'] <= upper_bound) & 
+                        (retest_data['high'] >= lower_bound)
+                    ]
+                    
+                    if len(retest_hits) > 0:
+                        retested = True
+                        # Calculate time to first retest in minutes
+                        first_retest_time = retest_hits.index[0]
+                        retest_time_minutes = (first_retest_time - cluster_end).total_seconds() / 60
+                
+                retested_poc_values.append(retested)
+                retest_time_values.append(retest_time_minutes)
+            else:
+                # No valid modal price, so no retest possible
+                retested_poc_values.append(False)
+                retest_time_values.append(np.nan)
         
         # Add all metrics to the result DataFrame
         high_volume_periods['skewness'] = skewness_values
@@ -196,6 +248,8 @@ def identify_volume_clusters(df, volume_multiplier=3.0):
         high_volume_periods['return_15m'] = return_15m_values
         high_volume_periods['return_30m'] = return_30m_values
         high_volume_periods['return_60m'] = return_60m_values
+        high_volume_periods['retested_poc'] = retested_poc_values
+        high_volume_periods['retest_time'] = retest_time_values
         
         # Add to all clusters
         all_clusters.append(high_volume_periods)
@@ -492,6 +546,88 @@ def analyze_forward_returns(clusters_df):
     
     return results
 
+def analyze_retest_bias(clusters_df):
+    """
+    Analyze the relationship between retest behavior and directional bias.
+    
+    Parameters:
+    -----------
+    clusters_df : DataFrame
+        DataFrame containing volume clusters with retest and return columns
+        
+    Returns:
+    --------
+    dict
+        Dictionary containing retest bias analysis results
+    """
+    if 'retested_poc' not in clusters_df.columns or 'return_30m' not in clusters_df.columns:
+        return {}
+    
+    print("\n" + "="*60)
+    print("RETEST vs DIRECTIONAL BIAS ANALYSIS")
+    print("="*60)
+    
+    # Split clusters into retested vs non-retested
+    retested_clusters = clusters_df[clusters_df['retested_poc'] == True]
+    non_retested_clusters = clusters_df[clusters_df['retested_poc'] == False]
+    
+    results = {}
+    
+    for return_col in ['return_15m', 'return_30m', 'return_60m']:
+        if return_col in clusters_df.columns:
+            horizon = return_col.replace('return_', '').replace('m', '-minute')
+            
+            # Analyze returns for retested clusters
+            retested_returns = retested_clusters[return_col].dropna()
+            non_retested_returns = non_retested_clusters[return_col].dropna()
+            
+            if len(retested_returns) > 0 and len(non_retested_returns) > 0:
+                retested_mean = retested_returns.mean() * 100
+                non_retested_mean = non_retested_returns.mean() * 100
+                
+                print(f"\n{horizon.upper()} RETURNS BY RETEST STATUS:")
+                print(f"  Retested clusters ({len(retested_returns)}): {retested_mean:+.2f}%")
+                print(f"  Non-retested clusters ({len(non_retested_returns)}): {non_retested_mean:+.2f}%")
+                print(f"  Difference: {retested_mean - non_retested_mean:+.2f}%")
+                
+                # Perform t-test between the two groups
+                try:
+                    t_stat, p_value = ttest_ind(retested_returns, non_retested_returns)
+                    is_significant = p_value < 0.05
+                    
+                    print(f"  t-statistic: {t_stat:.3f}")
+                    print(f"  p-value: {p_value:.4f}")
+                    
+                    if is_significant:
+                        if retested_mean > non_retested_mean:
+                            print(f"  ✅ SIGNIFICANT: Retested clusters show MORE positive bias")
+                        else:
+                            print(f"  ✅ SIGNIFICANT: Retested clusters show MORE negative bias")
+                    else:
+                        print(f"  ❌ NOT SIGNIFICANT: No difference between retested and non-retested clusters")
+                        
+                    results[return_col] = {
+                        'retested_mean_pct': retested_mean,
+                        'non_retested_mean_pct': non_retested_mean,
+                        'difference_pct': retested_mean - non_retested_mean,
+                        't_stat': t_stat,
+                        'p_value': p_value,
+                        'is_significant': is_significant,
+                        'retested_count': len(retested_returns),
+                        'non_retested_count': len(non_retested_returns)
+                    }
+                except ImportError:
+                    print(f"  (t-test requires scipy - using basic comparison)")
+                    results[return_col] = {
+                        'retested_mean_pct': retested_mean,
+                        'non_retested_mean_pct': non_retested_mean,
+                        'difference_pct': retested_mean - non_retested_mean,
+                        'retested_count': len(retested_returns),
+                        'non_retested_count': len(non_retested_returns)
+                    }
+    
+    return results
+
 if __name__ == "__main__":
     # Load synthetic data for testing
     from synthetic_data import generate_synthetic_ohlcv
@@ -507,7 +643,8 @@ if __name__ == "__main__":
         # Print results
         print(f"\nFound {len(clusters)} volume clusters:")
         display_columns = ['volume', 'cluster_strength', 'threshold', 'skewness', 'kurtosis', 
-                          'modal_price', 'price_delta', 'return_15m', 'return_30m', 'return_60m']
+                          'modal_price', 'price_delta', 'return_15m', 'return_30m', 'return_60m',
+                          'retested_poc', 'retest_time']
         available_columns = [col for col in display_columns if col in clusters.columns]
         print(clusters[available_columns].head())
         
@@ -535,6 +672,28 @@ if __name__ == "__main__":
             if len(price_deltas) > 0:
                 print(f"  Average price delta: ${price_deltas.mean():.2f}")
                 print(f"  Price delta range: ${price_deltas.min():.2f} - ${price_deltas.max():.2f}")
+        
+        # Print retest analysis summary
+        print(f"\nRetest analysis (±3 ticks within 60 minutes):")
+        if 'retested_poc' in clusters.columns:
+            retest_data = clusters['retested_poc'].dropna()
+            if len(retest_data) > 0:
+                retest_rate = retest_data.sum() / len(retest_data) * 100
+                print(f"  Retest rate: {retest_rate:.1f}% ({retest_data.sum()}/{len(retest_data)})")
+                
+                # Analyze retest times
+                if 'retest_time' in clusters.columns:
+                    retest_times = clusters[clusters['retested_poc'] == True]['retest_time'].dropna()
+                    if len(retest_times) > 0:
+                        print(f"  Average retest time: {retest_times.mean():.1f} minutes")
+                        print(f"  Median retest time: {retest_times.median():.1f} minutes")
+                        print(f"  Retest time range: {retest_times.min():.1f} - {retest_times.max():.1f} minutes")
+                        
+                        # Quick retest analysis (within 15 minutes)
+                        quick_retests = retest_times[retest_times <= 15].count()
+                        if len(retest_times) > 0:
+                            quick_retest_rate = quick_retests / len(retest_times) * 100
+                            print(f"  Quick retests (≤15 min): {quick_retest_rate:.1f}% ({quick_retests}/{len(retest_times)})")
         
         # Perform directional bias analysis
         return_analysis = analyze_forward_returns(clusters)
@@ -567,5 +726,29 @@ if __name__ == "__main__":
             save_path = f'data/volume_profile_{date}.png'
             plot_volume_profile(df, clusters, date, save_path)
             print(f"Plot for {date} saved to {save_path}")
+        
+        # Perform retest bias analysis
+        retest_bias_analysis = analyze_retest_bias(clusters)
+        
+        # Save retest bias analysis summary to CSV
+        if retest_bias_analysis:
+            retest_bias_data = []
+            for return_col, stats in retest_bias_analysis.items():
+                retest_bias_data.append({
+                    'return_col': return_col,
+                    'retested_mean_pct': stats['retested_mean_pct'],
+                    'non_retested_mean_pct': stats['non_retested_mean_pct'],
+                    'difference_pct': stats['difference_pct'],
+                    't_stat': stats['t_stat'],
+                    'p_value': stats['p_value'],
+                    'is_significant': stats['is_significant'],
+                    'retested_count': stats['retested_count'],
+                    'non_retested_count': stats['non_retested_count']
+                })
+            
+            retest_bias_df = pd.DataFrame(retest_bias_data)
+            retest_bias_path = 'data/retest_bias_summary.csv'
+            retest_bias_df.to_csv(retest_bias_path, index=False)
+            print(f"\n📊 Retest bias analysis summary saved to: {retest_bias_path}")
     else:
         print("No clusters found with the current threshold.") 

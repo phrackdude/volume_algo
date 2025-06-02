@@ -1,5 +1,5 @@
 from src.parse_zst_ohlcv import decompress_zst_file, load_ohlcv_from_jsonl, parse_dbn_with_databento
-from src.volume_cluster import identify_volume_clusters, analyze_forward_returns
+from src.volume_cluster import identify_volume_clusters, analyze_forward_returns, analyze_retest_bias
 import os
 import subprocess
 import traceback
@@ -140,6 +140,31 @@ def main():
                 summary_path = "data/cluster_return_summary.csv"
                 summary_df.to_csv(summary_path, index=False)
                 print(f"\n📊 Return analysis summary saved to: {summary_path}")
+            
+            # Perform retest bias analysis
+            print("\nStep 3.6: Analyzing retest vs directional bias...")
+            retest_bias_analysis = analyze_retest_bias(clusters)
+            
+            # Save retest bias analysis summary to CSV
+            if retest_bias_analysis:
+                retest_bias_data = []
+                for return_col, stats in retest_bias_analysis.items():
+                    retest_bias_data.append({
+                        'return_col': return_col,
+                        'retested_mean_pct': stats['retested_mean_pct'],
+                        'non_retested_mean_pct': stats['non_retested_mean_pct'],
+                        'difference_pct': stats['difference_pct'],
+                        't_stat': stats.get('t_stat', np.nan),
+                        'p_value': stats.get('p_value', np.nan),
+                        'is_significant': stats.get('is_significant', False),
+                        'retested_count': stats['retested_count'],
+                        'non_retested_count': stats['non_retested_count']
+                    })
+                
+                retest_bias_df = pd.DataFrame(retest_bias_data)
+                retest_bias_path = "data/retest_bias_summary.csv"
+                retest_bias_df.to_csv(retest_bias_path, index=False)
+                print(f"\n📊 Retest bias analysis summary saved to: {retest_bias_path}")
             
             # Save results for inspection
             clusters.to_csv("data/volume_clusters.csv")
