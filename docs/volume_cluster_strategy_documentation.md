@@ -18,10 +18,10 @@ The Volume Cluster Trading Strategy is a systematic approach to futures trading 
 
 | Version | Trades | Win Rate | Mean Return | Position-Adj Return | Sharpe Ratio | Key Innovation |
 |---------|--------|----------|-------------|---------------------|--------------|----------------|
-| **V3 Foundation** | 404 | 55.7% | +0.224% | N/A | 0.221 | Profit targets breakthrough |
-| **V4 Adaptive** | 284 | 59.5% | +0.297% | N/A | 0.346 | Dynamic adaptive filtering |
-| **V5 Original** | 117 | 64.1% | +0.391% | N/A | 0.397 | Tightened optimization |
-| **V5 Fixed** | 156 | 64.7% | +0.409% | N/A | 0.412 | **BIAS-FREE PERFECTION** |
+| **V3 Foundation**  | 404 | 55.7% | +0.224% | N/A | 0.221 | Profit targets breakthrough |
+| **V4 Adaptive**    | 284 | 59.5% | +0.297% | N/A | 0.346 | Dynamic adaptive filtering |
+| **V5 Original**    | 117 | 64.1% | +0.391% | N/A | 0.397 | Tightened optimization |
+| **V5 Fixed**       | 156 | 64.7% | +0.409% | N/A | 0.412 | **BIAS-FREE PERFECTION** |
 | **🏆 V6 BAYESIAN** | **156** | **64.7%** | **+0.409%** | **+0.813%** | **0.412** | **🧠 BAYESIAN REVOLUTION** |
 
 ### **🧠 V6 Bayesian: The Ultimate Adaptive Position Sizing**
