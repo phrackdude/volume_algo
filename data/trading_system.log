@@ -1,0 +1,25 @@
+2025-06-08 10:43:02,933 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-06-08 10:43:02,941 - INFO - V6 Real-Time Trading System initialized
+2025-06-08 10:43:02,942 - INFO - 🚀 Starting V6 Bayesian real-time strategy
+2025-06-08 10:43:02,942 - INFO - Connecting to Databento API...
+2025-06-08 10:43:03,943 - INFO - ✅ Connected to Databento API
+2025-06-08 10:53:05,732 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-06-09 12:09:45,969 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-06-09 12:09:45,975 - INFO - V6 Real-Time Trading System initialized
+2025-06-09 12:09:45,975 - INFO - 🚀 Starting V6 Bayesian real-time strategy
+2025-06-09 12:09:45,975 - INFO - Connecting to Databento API...
+2025-06-09 12:09:46,976 - INFO - ✅ Connected to Databento API
+2025-06-09 12:11:40,681 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-06-09 21:37:45,095 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-06-09 21:37:45,097 - INFO - V6 Real-Time Trading System initialized
+2025-06-09 21:37:45,098 - INFO - Paper trading database initialized: ../data/paper_trades.db
+2025-06-09 21:37:45,098 - INFO - 💰 Starting Portfolio: $15,000.00
+2025-06-09 21:37:45,098 - INFO - 🤖 Starting Automated Paper Trading System
+2025-06-09 21:37:45,098 - INFO - 💰 Initial Portfolio: $15,000.00
+2025-06-09 21:37:45,098 - INFO -    - 20-second execution delays
+2025-06-09 21:37:45,098 - INFO -    - Realistic offer-side fills
+2025-06-09 21:37:45,098 - INFO -    - Portfolio-based position sizing
+2025-06-09 21:37:45,098 - INFO -    - Automatic Bayesian feedback
+2025-06-09 21:37:45,098 - INFO -    - Continuous learning enabled
+2025-06-09 21:37:45,098 - INFO - Connecting to Databento API...
+2025-06-09 21:37:46,099 - INFO - ✅ Connected to Databento API
