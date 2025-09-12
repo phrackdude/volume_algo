@@ -13,7 +13,7 @@ cd /path/to/volume-cluster-analyzer
 source venv/bin/activate
 
 # Set your API key for the session
-export DATABENTO_API_KEY=db-vv7rLkKHSiGx4KAADSmETFbaAjvdf
+export DATABENTO_API_KEY=your_api_key_here
 
 # Start the main trading system
 python launch_trading_system.py
@@ -298,7 +298,7 @@ tail -f data/trading_system.log
 ### **Daily Commands:**
 ```bash
 # Morning startup
-source venv/bin/activate && export DATABENTO_API_KEY=db-vv7rLkKHSiGx4KAADSmETFbaAjvdf && python launch_trading_system.py
+source venv/bin/activate && export DATABENTO_API_KEY=your_api_key_here && python launch_trading_system.py
 
 # Record execution
 python src/trade_feedback.py
