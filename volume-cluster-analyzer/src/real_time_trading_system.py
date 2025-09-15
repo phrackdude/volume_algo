@@ -121,7 +121,7 @@ class VolumeCluster:
 class BayesianStatsManager:
     """Manages Bayesian statistics storage and calculations"""
     
-    def __init__(self, db_path: str = "../data/bayesian_stats.db"):
+    def __init__(self, db_path: str = "/opt/v6-trading-system/data/bayesian_stats.db"):
         self.db_path = db_path
         self.init_database()
         

@@ -33,7 +33,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 from automated_paper_trader import AutomatedPaperTrader
 from monitoring_dashboard import TradingMonitor
-from scheduled_email_reporter import ScheduledEmailReporter
+# from scheduled_email_reporter import ScheduledEmailReporter  # Removed - using dashboard only
 
 logger = logging.getLogger(__name__)
 
@@ -43,11 +43,11 @@ class Phase4SystemLauncher:
     def __init__(self):
         self.trading_system = None
         self.monitoring_dashboard = None
-        self.email_reporter = None
+        # self.email_reporter = None  # Removed - using dashboard only
         
         # Threading control
         self.dashboard_thread = None
-        self.email_thread = None
+        # self.email_thread = None  # Removed - using dashboard only
         self.running = False
         
         # Setup signal handlers
@@ -78,23 +78,9 @@ class Phase4SystemLauncher:
         except Exception as e:
             logger.error(f"❌ Failed to start monitoring dashboard: {e}")
     
-    def start_email_reporter(self):
-        """Start the email reporter in a separate thread"""
-        try:
-            logger.info("📧 Starting email reporter...")
-            self.email_reporter = ScheduledEmailReporter()
-            
-            # Run email reporter in a separate thread
-            self.email_thread = threading.Thread(
-                target=self.email_reporter.run_scheduler,
-                daemon=True
-            )
-            self.email_thread.start()
-            
-            logger.info("✅ Email reporter started (daily reports at 4:30 PM EST)")
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to start email reporter: {e}")
+    # def start_email_reporter(self):
+    #     """Start the email reporter in a separate thread - REMOVED"""
+    #     logger.info("📧 Email reporter disabled - using dashboard only")
     
     async def start_trading_system(self):
         """Start the main trading system"""
@@ -122,10 +108,10 @@ class Phase4SystemLauncher:
             logger.info("⏹️  Stopping monitoring dashboard...")
             # Dashboard will stop when the thread is killed
         
-        # Stop email reporter
-        if self.email_thread and self.email_thread.is_alive():
-            logger.info("⏹️  Stopping email reporter...")
-            # Email reporter will stop when the thread is killed
+        # Email reporter removed - using dashboard only
+        # if self.email_thread and self.email_thread.is_alive():
+        #     logger.info("⏹️  Stopping email reporter...")
+        #     # Email reporter will stop when the thread is killed
         
         logger.info("✅ Shutdown complete")
     
@@ -136,7 +122,7 @@ class Phase4SystemLauncher:
         logger.info("🎯 Complete System Features:")
         logger.info("   ✅ Real-time paper trading with V6 Bayesian strategy")
         logger.info("   ✅ Web-based monitoring dashboard")
-        logger.info("   ✅ Daily email performance reports")
+        logger.info("   ✅ Dashboard-based reporting (email disabled)")
         logger.info("   ✅ Automated deployment ready")
         logger.info("   ✅ System health monitoring")
         logger.info("="*60)
@@ -147,8 +133,8 @@ class Phase4SystemLauncher:
             # Start monitoring dashboard
             self.start_monitoring_dashboard()
             
-            # Start email reporter
-            self.start_email_reporter()
+            # Email reporter removed - using dashboard only
+            # self.start_email_reporter()
             
             # Wait a moment for services to start
             await asyncio.sleep(2)

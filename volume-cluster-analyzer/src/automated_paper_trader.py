@@ -155,7 +155,7 @@ class AutomatedPaperTrader:
         self.executor = RealisticExecutionSimulator()
         self.open_trades: List[PaperTrade] = []
         self.closed_trades: List[PaperTrade] = []
-        self.db_path = "../data/paper_trades.db"
+        self.db_path = "/opt/v6-trading-system/data/paper_trades.db"
         
         # Portfolio tracking
         self.starting_balance = starting_balance
@@ -672,28 +672,24 @@ class AutomatedPaperTrader:
         
         while True:
             try:
-                # Simulate market data (replace with real Databento feed)
+                # Check for new market data every minute
                 await asyncio.sleep(60)  # Check every minute
                 
+                # Get latest market data from Databento
                 current_time = datetime.now()
-                current_price = 6010.0 + random.uniform(-5, 5)  # Simulate price movement
+                logger.info(f"🔍 Checking for market data at {current_time}")
                 
-                # Simulate market data
-                simulated_data = pd.DataFrame({
-                    'timestamp': [current_time],
-                    'open': [current_price - 1],
-                    'high': [current_price + 2],
-                    'low': [current_price - 2],
-                    'close': [current_price],
-                    'volume': [random.randint(8000, 20000)]  # Variable volume
-                })
-                simulated_data.set_index('timestamp', inplace=True)
+                # The trading system should have real data from Databento connector
+                # If no real data is available, log a warning but continue
+                if self.trading_system.current_data.empty:
+                    logger.warning("⚠️  No market data available from Databento - system waiting for data")
+                    continue
                 
-                # Update trading system data
-                self.trading_system.current_data = pd.concat([
-                    self.trading_system.current_data, 
-                    simulated_data
-                ]).tail(100)
+                # Get the latest data point
+                latest_data = self.trading_system.current_data.tail(1)
+                if latest_data.empty:
+                    logger.warning("⚠️  No recent market data available")
+                    continue
                 
                 # Risk management checks
                 if self.should_stop_trading():

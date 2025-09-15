@@ -79,7 +79,7 @@ class TradingSystemConfig:
     # =================================================================
     
     # Data storage
-    database_path: str = "../data/bayesian_stats.db"
+    database_path: str = "/opt/v6-trading-system/data/bayesian_stats.db"
     log_file_path: str = "../data/trading_system.log"
     recommendations_log_path: str = "../data/recommendations_log.jsonl"
     latest_recommendation_path: str = "../data/latest_recommendation.json"
