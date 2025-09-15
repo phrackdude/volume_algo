@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import logging
 from typing import Dict, List, Optional
+import pytz
 import os
 
 # Web framework
@@ -30,6 +31,9 @@ class TradingMonitor:
         self.bayesian_db_path = bayesian_db_path
         self.app = Flask(__name__, template_folder='/opt/v6-trading-system/templates')
         self.setup_routes()
+        
+        # Timezone for market hours (EST/EDT)
+        self.est_tz = pytz.timezone('US/Eastern')
         
         # Performance cache
         self.performance_cache = {}
@@ -431,11 +435,17 @@ class TradingMonitor:
             except:
                 db_status = "error"
             
-            # Check if system is in market hours
-            now = datetime.now()
-            market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
-            market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
-            is_market_hours = market_open <= now <= market_close and now.weekday() < 5
+            # Check if system is in market hours (EST/EDT)
+            now_est = datetime.now(self.est_tz)
+            current_time = now_est.time()
+            
+            # Check if it's a weekday (Monday=0, Sunday=6)
+            is_weekday = now_est.weekday() < 5
+            
+            # Check if within market hours (9:30 AM - 4:00 PM EST/EDT)
+            is_market_hours = (current_time >= now_est.replace(hour=9, minute=30, second=0, microsecond=0).time() and 
+                              current_time <= now_est.replace(hour=16, minute=0, second=0, microsecond=0).time() and 
+                              is_weekday)
             
             return {
                 "timestamp": datetime.now().isoformat(),
@@ -572,11 +582,17 @@ class TradingMonitor:
             
             conn.close()
             
-            # Get system status for market hours
-            now = datetime.now()
-            market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
-            market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
-            is_market_hours = market_open <= now <= market_close and now.weekday() < 5
+            # Get system status for market hours (EST/EDT)
+            now_est = datetime.now(self.est_tz)
+            current_time = now_est.time()
+            
+            # Check if it's a weekday (Monday=0, Sunday=6)
+            is_weekday = now_est.weekday() < 5
+            
+            # Check if within market hours (9:30 AM - 4:00 PM EST/EDT)
+            is_market_hours = (current_time >= now_est.replace(hour=9, minute=30, second=0, microsecond=0).time() and 
+                              current_time <= now_est.replace(hour=16, minute=0, second=0, microsecond=0).time() and 
+                              is_weekday)
             
             return {
                 "timestamp": datetime.now().isoformat(),
@@ -589,10 +605,17 @@ class TradingMonitor:
         except Exception as e:
             logger.error(f"Error getting live ticker data: {e}")
             # Return basic ticker data even on error
-            now = datetime.now()
-            market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
-            market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
-            is_market_hours = market_open <= now <= market_close and now.weekday() < 5
+            # Check market hours (EST/EDT)
+            now_est = datetime.now(self.est_tz)
+            current_time = now_est.time()
+            
+            # Check if it's a weekday (Monday=0, Sunday=6)
+            is_weekday = now_est.weekday() < 5
+            
+            # Check if within market hours (9:30 AM - 4:00 PM EST/EDT)
+            is_market_hours = (current_time >= now_est.replace(hour=9, minute=30, second=0, microsecond=0).time() and 
+                              current_time <= now_est.replace(hour=16, minute=0, second=0, microsecond=0).time() and 
+                              is_weekday)
             
             return {
                 "timestamp": datetime.now().isoformat(),
