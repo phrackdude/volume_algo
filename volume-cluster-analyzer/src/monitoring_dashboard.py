@@ -36,6 +36,11 @@ class TradingMonitor:
         self.cache_timestamp = None
         self.cache_duration = 60  # Cache for 1 minute
         
+        # Data retention settings
+        self.max_trades_for_ticker = 100  # Keep last 100 trades for ticker
+        self.cleanup_interval_hours = 24  # Cleanup every 24 hours
+        self.last_cleanup = datetime.now()
+        
     def setup_routes(self):
         """Setup Flask routes for the dashboard"""
         
@@ -93,6 +98,16 @@ class TradingMonitor:
                 return jsonify(status)
             except Exception as e:
                 logger.error(f"Error getting system status: {e}")
+                return jsonify({"error": str(e)}), 500
+        
+        @self.app.route('/api/live_ticker')
+        def get_live_ticker():
+            """Get live ticker data for rolling display"""
+            try:
+                ticker_data = self.get_live_ticker_data()
+                return jsonify(ticker_data)
+            except Exception as e:
+                logger.error(f"Error getting live ticker data: {e}")
                 return jsonify({"error": str(e)}), 500
     
     def get_performance_metrics(self) -> Dict:
@@ -436,6 +451,158 @@ class TradingMonitor:
             logger.error(f"Error getting system status: {e}")
             return {"error": str(e)}
     
+    def cleanup_old_data(self):
+        """Clean up old data to prevent database bloat"""
+        try:
+            # Check if cleanup is needed
+            hours_since_cleanup = (datetime.now() - self.last_cleanup).total_seconds() / 3600
+            if hours_since_cleanup < self.cleanup_interval_hours:
+                return
+            
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Count total trades
+            cursor.execute("SELECT COUNT(*) FROM paper_trades")
+            total_trades = cursor.fetchone()[0]
+            
+            # If we have more than max_trades_for_ticker, keep only the most recent ones
+            if total_trades > self.max_trades_for_ticker:
+                # Get the timestamp of the trade we want to keep
+                cursor.execute('''
+                    SELECT timestamp FROM paper_trades 
+                    ORDER BY timestamp DESC 
+                    LIMIT 1 OFFSET ?
+                ''', (self.max_trades_for_ticker,))
+                
+                cutoff_timestamp = cursor.fetchone()
+                if cutoff_timestamp:
+                    # Delete older trades (but keep all for performance analysis)
+                    # We'll just limit the ticker query instead of deleting data
+                    logger.info(f"Ticker data retention: Showing last {self.max_trades_for_ticker} trades")
+            
+            conn.close()
+            self.last_cleanup = datetime.now()
+            
+        except Exception as e:
+            logger.warning(f"Data cleanup failed: {e}")
+
+    def get_live_ticker_data(self) -> Dict:
+        """Get live ticker data for rolling display"""
+        try:
+            # Perform cleanup if needed
+            self.cleanup_old_data()
+            
+            # Get current market data from the latest recommendation file
+            latest_rec_path = Path("../data/latest_recommendation.json")
+            current_market_data = None
+            
+            if latest_rec_path.exists():
+                try:
+                    with open(latest_rec_path, 'r') as f:
+                        latest_rec = json.load(f)
+                        current_market_data = {
+                            "timestamp": latest_rec.get("timestamp", datetime.now().isoformat()),
+                            "price": latest_rec.get("price", 0),
+                            "volume_ratio": latest_rec.get("volume_ratio", 0),
+                            "signal_strength": latest_rec.get("signal_strength", 0),
+                            "confidence": latest_rec.get("confidence", 0),
+                            "bayesian_multiplier": latest_rec.get("bayesian_multiplier", 1.0),
+                            "reasoning": latest_rec.get("reasoning", "No recent signal"),
+                            "action": latest_rec.get("action", "HOLD"),
+                            "contract": latest_rec.get("contract", "ES")
+                        }
+                except Exception as e:
+                    logger.warning(f"Could not read latest recommendation: {e}")
+            
+            # Get recent trade activity (last 5 trades)
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT 
+                    timestamp,
+                    action,
+                    contract,
+                    execution_price,
+                    pnl,
+                    status,
+                    confidence,
+                    bayesian_multiplier,
+                    volume_ratio,
+                    signal_strength,
+                    exit_reason
+                FROM paper_trades 
+                ORDER BY timestamp DESC 
+                LIMIT ?
+            ''', (min(5, self.max_trades_for_ticker),))
+            
+            recent_activity = []
+            rows = cursor.fetchall()
+            logger.info(f"Found {len(rows)} trades in database")
+            
+            for i, row in enumerate(rows):
+                try:
+                    logger.info(f"Processing row {i}: {len(row)} columns")
+                    # Generate reasoning from available data
+                    volume_ratio = row[8] if len(row) > 8 and row[8] is not None else 0.0
+                    signal_strength = row[9] if len(row) > 9 and row[9] is not None else 0.0
+                    bayesian_multiplier = row[7] if len(row) > 7 and row[7] is not None else 1.0
+                    exit_reason = row[11] if len(row) > 11 and row[11] is not None else ""
+                    
+                    reasoning = f"V6: {volume_ratio:.1f}x vol, {signal_strength:.3f} signal, {bayesian_multiplier:.2f}x multiplier"
+                    if exit_reason:
+                        reasoning += f" | Exit: {exit_reason}"
+                    
+                    activity = {
+                        "timestamp": row[0],
+                        "action": row[1],
+                        "contract": row[2],
+                        "price": row[3] if len(row) > 3 and row[3] is not None else 0.0,
+                        "pnl": row[4] if len(row) > 4 and row[4] is not None else 0.0,
+                        "status": row[5],
+                        "reasoning": reasoning,
+                        "confidence": row[6] if len(row) > 6 and row[6] is not None else 0.5,
+                        "bayesian_multiplier": bayesian_multiplier
+                    }
+                    recent_activity.append(activity)
+                except Exception as e:
+                    logger.error(f"Error processing row {i}: {e}, row length: {len(row)}")
+                    continue
+            
+            conn.close()
+            
+            # Get system status for market hours
+            now = datetime.now()
+            market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+            market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+            is_market_hours = market_open <= now <= market_close and now.weekday() < 5
+            
+            return {
+                "timestamp": datetime.now().isoformat(),
+                "market_status": "OPEN" if is_market_hours else "CLOSED",
+                "current_market": current_market_data,
+                "recent_activity": recent_activity,
+                "system_status": "active" if is_market_hours else "standby"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting live ticker data: {e}")
+            # Return basic ticker data even on error
+            now = datetime.now()
+            market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+            market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+            is_market_hours = market_open <= now <= market_close and now.weekday() < 5
+            
+            return {
+                "timestamp": datetime.now().isoformat(),
+                "market_status": "OPEN" if is_market_hours else "CLOSED",
+                "current_market": None,
+                "recent_activity": [],
+                "system_status": "error",
+                "error": str(e)
+            }
+    
     def run_dashboard(self, host: str = "0.0.0.0", port: int = 5000, debug: bool = False):
         """Run the monitoring dashboard"""
         logger.info(f"🌐 Starting V6 Trading System Dashboard on {host}:{port}")
@@ -570,6 +737,68 @@ class TradingMonitor:
             font-size: 12px;
             margin-top: 10px;
         }
+        .live-ticker {
+            background: linear-gradient(90deg, #2c3e50, #34495e, #2c3e50);
+            color: white;
+            padding: 15px 0;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+        }
+        .ticker-content {
+            display: flex;
+            align-items: center;
+            white-space: nowrap;
+            animation: scroll 60s linear infinite;
+        }
+        .ticker-item {
+            display: inline-flex;
+            align-items: center;
+            margin-right: 40px;
+            padding: 8px 15px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .ticker-price {
+            color: #27ae60;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+        .ticker-volume {
+            color: #f39c12;
+            margin-right: 10px;
+        }
+        .ticker-signal {
+            color: #3498db;
+            margin-right: 10px;
+        }
+        .ticker-reasoning {
+            color: #ecf0f1;
+            font-style: italic;
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .ticker-status {
+            position: absolute;
+            top: 10px;
+            right: 20px;
+            background: rgba(39, 174, 96, 0.8);
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .ticker-status.closed {
+            background: rgba(231, 76, 60, 0.8);
+        }
+        @keyframes scroll {
+            0% { transform: translateX(100%); }
+            100% { transform: translateX(-100%); }
+        }
     </style>
 </head>
 <body>
@@ -578,6 +807,19 @@ class TradingMonitor:
             <h1>🤖 V6 Bayesian Trading System</h1>
             <p>Real-Time Performance Dashboard</p>
             <button class="refresh-btn" onclick="refreshData()">🔄 Refresh Data</button>
+        </div>
+
+        <!-- Live Ticker -->
+        <div class="live-ticker">
+            <div class="ticker-status" id="ticker-status">MARKET CLOSED</div>
+            <div class="ticker-content" id="ticker-content">
+                <div class="ticker-item">
+                    <span class="ticker-price">ES: $0.00</span>
+                    <span class="ticker-volume">Vol: 0.0x</span>
+                    <span class="ticker-signal">Signal: 0.00</span>
+                    <span class="ticker-reasoning">System initializing...</span>
+                </div>
+            </div>
         </div>
 
         <div class="grid">
@@ -911,15 +1153,74 @@ class TradingMonitor:
             container.appendChild(table);
         }
 
+        function updateLiveTicker(tickerData) {
+            const statusElement = document.getElementById('ticker-status');
+            const contentElement = document.getElementById('ticker-content');
+            
+            if (!tickerData) return;
+            
+            // Update market status
+            statusElement.textContent = tickerData.market_status;
+            statusElement.className = `ticker-status ${tickerData.market_status === 'OPEN' ? '' : 'closed'}`;
+            
+            // Build ticker content
+            let tickerItems = [];
+            
+            // Add current market data if available
+            if (tickerData.current_market) {
+                const market = tickerData.current_market;
+                tickerItems.push(`
+                    <div class="ticker-item">
+                        <span class="ticker-price">${market.contract}: $${market.price.toFixed(2)}</span>
+                        <span class="ticker-volume">Vol: ${market.volume_ratio.toFixed(1)}x</span>
+                        <span class="ticker-signal">Signal: ${market.signal_strength.toFixed(3)}</span>
+                        <span class="ticker-reasoning">${market.reasoning}</span>
+                    </div>
+                `);
+            }
+            
+            // Add recent trade activity
+            if (tickerData.recent_activity && tickerData.recent_activity.length > 0) {
+                tickerData.recent_activity.forEach(activity => {
+                    const pnlClass = activity.pnl > 0 ? 'positive' : activity.pnl < 0 ? 'negative' : 'neutral';
+                    const timeAgo = new Date(activity.timestamp).toLocaleTimeString();
+                    
+                    tickerItems.push(`
+                        <div class="ticker-item">
+                            <span class="ticker-price">${activity.action} ${activity.contract}</span>
+                            <span class="ticker-volume">@ $${activity.price.toFixed(2)}</span>
+                            <span class="ticker-signal ${pnlClass}">P&L: $${activity.pnl.toFixed(2)}</span>
+                            <span class="ticker-reasoning">${activity.reasoning} (${timeAgo})</span>
+                        </div>
+                    `);
+                });
+            }
+            
+            // If no data, show default message
+            if (tickerItems.length === 0) {
+                tickerItems.push(`
+                    <div class="ticker-item">
+                        <span class="ticker-price">ES: $0.00</span>
+                        <span class="ticker-volume">Vol: 0.0x</span>
+                        <span class="ticker-signal">Signal: 0.00</span>
+                        <span class="ticker-reasoning">Waiting for market data...</span>
+                    </div>
+                `);
+            }
+            
+            contentElement.innerHTML = tickerItems.join('');
+        }
+
         async function refreshData() {
             try {
                 // Fetch all data in parallel
-                const [performance, trades, equity, bayesian, status] = await Promise.all([
+                const [performance, trades, equity, bayesian, status, ticker] = await Promise.all([
                     fetchData('performance'),
                     fetchData('trades?limit=10'),
                     fetchData('equity_curve?days=30'),
                     fetchData('bayesian_stats'),
-                    fetchData('system_status')
+                    fetchData('system_status'),
+                    fetchData('live_ticker')
                 ]);
 
                 if (performance) {
@@ -942,6 +1243,10 @@ class TradingMonitor:
 
                 if (status) {
                     updateSystemStatus(status);
+                }
+
+                if (ticker) {
+                    updateLiveTicker(ticker);
                 }
 
                 // Update last updated timestamp
