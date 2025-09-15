@@ -441,7 +441,7 @@ class TradingMonitor:
         logger.info(f"🌐 Starting V6 Trading System Dashboard on {host}:{port}")
         
         # Create templates directory if it doesn't exist
-        templates_dir = Path("templates")
+        templates_dir = Path("/opt/v6-trading-system/templates")
         templates_dir.mkdir(exist_ok=True)
         
         # Create the HTML template
@@ -960,7 +960,8 @@ class TradingMonitor:
 </body>
 </html>'''
         
-        template_path = Path("templates/dashboard.html")
+        # Use absolute path for template
+        template_path = Path("/opt/v6-trading-system/templates/dashboard.html")
         template_path.parent.mkdir(exist_ok=True)
         with open(template_path, 'w') as f:
             f.write(template_content)
