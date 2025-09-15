@@ -134,8 +134,10 @@ class DatabentoConnector:
             
             # Add callback to process data
             def process_record(record):
+                logger.info(f"🔔 CALLBACK TRIGGERED: {type(record).__name__}")
                 # Skip system messages and other non-data records
                 if not hasattr(record, 'schema'):
+                    logger.info(f"🔔 Skipping record without schema: {type(record).__name__}")
                     return
                     
                 logger.info(f"📊 Received record: {record.schema} - {type(record).__name__}")
