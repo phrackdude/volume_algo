@@ -80,7 +80,7 @@ class DatabentoConnector:
         
         try:
             # Map contract to Databento symbol
-            symbol = self.contract_mapping.get(contract, 'ESZ5')
+            symbol = self.contract_mapping.get(contract, 'ESU5')
             
             if end_date is None:
                 end_date = datetime.now()
@@ -119,7 +119,7 @@ class DatabentoConnector:
             return
         
         try:
-            symbol = self.contract_mapping.get(contract, 'ESZ5')
+            symbol = self.contract_mapping.get(contract, 'ESU5')
             
             logger.info(f"📡 Starting live stream for {symbol}")
             
