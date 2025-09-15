@@ -94,7 +94,7 @@ class DatabentoConnector:
                 schema="ohlcv-1m",  # 1-minute bars
                 start=start_date,
                 end=end_date,
-                stype_in="parent",
+                stype_in="root",  # Use "root" for specific contract symbols
                 stype_out="instrument_id"
             )
             
@@ -128,7 +128,7 @@ class DatabentoConnector:
                 dataset="GLBX.MDP3",
                 schema="ohlcv-1m",
                 symbols=[symbol],
-                stype_in="parent"
+                stype_in="root"  # Use "root" for specific contract symbols
             )
             
             self.is_connected = True
