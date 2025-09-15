@@ -32,12 +32,13 @@ class DatabentoConnector:
         self.is_connected = False
         self.data_callback = None
         
-        # ES futures contract mapping
+        # ES futures contract mapping - use specific contract symbols
         self.contract_mapping = {
-            'ES JUN25': 'ES.FUT',  # Generic ES futures
-            'ES SEP25': 'ES.FUT',  # Generic ES futures
-            'ES DEC25': 'ES.FUT',  # Generic ES futures
-            'ES MAR26': 'ES.FUT',  # Generic ES futures
+            'ES JUN25': 'ESM6',  # ES Jun 2026
+            'ES SEP25': 'ESU5',  # ES Sep 2025 (current front month)
+            'ES DEC25': 'ESZ5',  # ES Dec 2025
+            'ES MAR26': 'ESH6',  # ES Mar 2026
+            'ES.FUT': 'ESZ5',    # Default to Dec 2025
         }
         
     async def initialize(self, api_key: str = None):
@@ -118,7 +119,7 @@ class DatabentoConnector:
             return
         
         try:
-            symbol = self.contract_mapping.get(contract, 'ES.FUT')
+            symbol = self.contract_mapping.get(contract, 'ESZ5')
             
             logger.info(f"📡 Starting live stream for {symbol}")
             
