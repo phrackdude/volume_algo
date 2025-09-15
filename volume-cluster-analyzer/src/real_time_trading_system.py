@@ -446,7 +446,18 @@ class RealTimeTradingSystem:
         # Set up data callback
         self.databento_connector.set_data_callback(self.on_market_data_received)
         
-        logger.info("✅ Connected to Databento API")
+        # Start live data stream
+        logger.info("📡 Starting live data stream...")
+        try:
+            # Use ES futures contract for live streaming
+            contract = "ES.FUT"  # Generic ES futures
+            await self.databento_connector.start_live_stream(contract)
+            logger.info("✅ Live data stream started")
+        except Exception as e:
+            logger.error(f"❌ Failed to start live stream: {e}")
+            return False
+        
+        logger.info("✅ Connected to Databento API with live streaming")
         return True
     
     def on_market_data_received(self, data: pd.DataFrame):
