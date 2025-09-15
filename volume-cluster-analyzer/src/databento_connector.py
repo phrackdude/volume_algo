@@ -112,34 +112,31 @@ class DatabentoConnector:
             logger.error(f"❌ Failed to get historical data: {e}")
             return self._simulate_historical_data(contract, start_date, end_date)
     
-    async def start_live_stream(self, contract: str):
-        """Start live data streaming for specified contract"""
+    def start_live_stream(self, contract: str):
+        """Start live data streaming for specified contract using synchronous approach"""
         if not DATABENTO_AVAILABLE or not self.live_client:
             logger.info("📡 Databento not available - no live data stream")
             return
         
         try:
-            symbol = self.contract_mapping.get(contract, 'ESU5')
+            # Use ES.FUT with parent stype for live data
+            symbol = "ES.FUT"
             
             logger.info(f"📡 Starting live stream for {symbol}")
             
-            # Subscribe to live data
-            # Use "parent" for generic symbols like ES.FUT, "raw_symbol" for specific contracts
-            stype = "parent" if symbol == "ES.FUT" else "raw_symbol"
+            # Subscribe to live data using the working approach
             self.live_client.subscribe(
                 dataset="GLBX.MDP3",
                 schema="ohlcv-1m",
-                symbols=[symbol],
-                stype_in=stype
+                stype_in="parent",
+                symbols=[symbol]
             )
             
-            self.is_connected = True
-            
-            # Process live data
-            async for record in self.live_client:
+            # Add callback to process data
+            def process_record(record):
                 # Skip system messages and other non-data records
                 if not hasattr(record, 'schema'):
-                    continue
+                    return
                     
                 if record.schema == "ohlcv-1m":
                     # Convert to DataFrame format
@@ -156,13 +153,15 @@ class DatabentoConnector:
                     # Send to callback
                     if self.data_callback:
                         self.data_callback(data_row)
+            
+            self.live_client.add_callback(process_record)
+            self.live_client.start()
+            
+            self.is_connected = True
+            logger.info("✅ Live data stream started successfully")
                         
         except Exception as e:
-            if "live data license" in str(e):
-                logger.warning("⚠️  Live data license required - falling back to simulation")
-                await self._simulate_live_stream(contract)
-            else:
-                logger.error(f"❌ Live stream error: {e}")
+            logger.error(f"❌ Live stream error: {e}")
             self.is_connected = False
     
     def _simulate_historical_data(self, contract: str, start_date: datetime, 

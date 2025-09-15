@@ -451,7 +451,7 @@ class RealTimeTradingSystem:
         try:
             # Use ES futures contract for live streaming
             contract = "ES.FUT"  # Generic ES futures - should auto-select front month
-            await self.databento_connector.start_live_stream(contract)
+            self.databento_connector.start_live_stream(contract)
             logger.info("✅ Live data stream started")
         except Exception as e:
             logger.error(f"❌ Failed to start live stream: {e}")
