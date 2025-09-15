@@ -471,6 +471,9 @@ class RealTimeTradingSystem:
             # Append new data to current buffer
             self.current_data = pd.concat([self.current_data, data]).tail(100)
             
+            # Always save current market data for ticker display
+            self.save_current_market_data(data)
+            
             # Check for volume clusters only during market hours
             if self.is_market_hours():
                 cluster = self.detect_volume_cluster(self.current_data)
@@ -768,6 +771,45 @@ class RealTimeTradingSystem:
             f.write(json.dumps(rec_dict) + '\n')
         
         logger.info(f"💾 Recommendation saved: {rec.action} {rec.quantity} {rec.contract} @ ${rec.price}")
+    
+    def save_current_market_data(self, data: pd.DataFrame):
+        """Save current market data for ticker display"""
+        try:
+            if data.empty:
+                return
+                
+            # Get the latest data point
+            latest = data.iloc[-1]
+            
+            # Create market data dict for ticker
+            market_data = {
+                'timestamp': latest.name.isoformat() if hasattr(latest.name, 'isoformat') else str(latest.name),
+                'contract': 'ES.FUT',  # Generic ES futures
+                'price': float(latest['close']),
+                'volume': int(latest['volume']),
+                'open': float(latest['open']),
+                'high': float(latest['high']),
+                'low': float(latest['low']),
+                'close': float(latest['close']),
+                'signal_strength': 0.0,  # No signal when no cluster
+                'volume_ratio': 1.0,     # No volume ratio when no cluster
+                'bayesian_multiplier': 1.0,  # No multiplier when no cluster
+                'action': 'HOLD',
+                'confidence': 0.0,
+                'reasoning': 'Live market data - no trading signal detected'
+            }
+            
+            # Ensure data directory exists
+            os.makedirs(os.path.dirname(config.latest_recommendation_path), exist_ok=True)
+            
+            # Save to latest recommendation file for ticker
+            with open(config.latest_recommendation_path, 'w') as f:
+                json.dump(market_data, f, indent=2)
+                
+            logger.debug(f"📊 Market data saved: ES.FUT @ ${market_data['price']:.2f}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error saving market data: {e}")
 
 async def main():
     """Main entry point"""
