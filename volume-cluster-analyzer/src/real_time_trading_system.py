@@ -776,11 +776,14 @@ class RealTimeTradingSystem:
     def save_current_market_data(self, data: pd.DataFrame):
         """Save current market data for ticker display"""
         try:
+            logger.info(f"💾 save_current_market_data called with {len(data)} rows")
             if data.empty:
+                logger.info("💾 Data is empty, returning")
                 return
                 
             # Get the latest data point
             latest = data.iloc[-1]
+            logger.info(f"💾 Latest data point: {latest}")
             
             # Create market data dict for ticker
             market_data = {
@@ -800,17 +803,22 @@ class RealTimeTradingSystem:
                 'reasoning': 'Live market data - no trading signal detected'
             }
             
+            logger.info(f"💾 Market data dict created: {market_data}")
+            
             # Ensure data directory exists
             os.makedirs(os.path.dirname(config.latest_recommendation_path), exist_ok=True)
+            logger.info(f"💾 Directory created: {os.path.dirname(config.latest_recommendation_path)}")
             
             # Save to latest recommendation file for ticker
             with open(config.latest_recommendation_path, 'w') as f:
                 json.dump(market_data, f, indent=2)
                 
-            logger.debug(f"📊 Market data saved: ES.FUT @ ${market_data['price']:.2f}")
+            logger.info(f"📊 Market data saved: ES.FUT @ ${market_data['price']:.2f}")
             
         except Exception as e:
             logger.error(f"❌ Error saving market data: {e}")
+            import traceback
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
 
 async def main():
     """Main entry point"""
