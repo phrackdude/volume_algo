@@ -138,7 +138,10 @@ class DatabentoConnector:
                 if not hasattr(record, 'schema'):
                     return
                     
+                logger.info(f"📊 Received record: {record.schema} - {type(record).__name__}")
+                
                 if record.schema == "ohlcv-1m":
+                    logger.info(f"📈 Processing OHLCV data: {record.close / 1e9:.2f}")
                     # Convert to DataFrame format
                     data_row = pd.DataFrame({
                         'timestamp': [pd.to_datetime(record.ts_event, unit='ns')],
@@ -152,7 +155,10 @@ class DatabentoConnector:
                     
                     # Send to callback
                     if self.data_callback:
+                        logger.info(f"📤 Sending data to callback: {data_row.iloc[0]['close']:.2f}")
                         self.data_callback(data_row)
+                    else:
+                        logger.warning("⚠️ No data callback set")
             
             self.live_client.add_callback(process_record)
             self.live_client.start()
