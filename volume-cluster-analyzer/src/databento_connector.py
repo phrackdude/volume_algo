@@ -124,7 +124,7 @@ class DatabentoConnector:
             logger.info(f"📡 Starting live stream for {symbol}")
             
             # Subscribe to live data
-            await self.live_client.subscribe(
+            self.live_client.subscribe(
                 dataset="GLBX.MDP3",
                 schema="ohlcv-1m",
                 symbols=[symbol],
