@@ -160,7 +160,10 @@ class DatabentoConnector:
                     else:
                         logger.warning("⚠️ No data callback set")
             
+            logger.info("📞 Registering callback function")
             self.live_client.add_callback(process_record)
+            
+            logger.info("🚀 Starting live client")
             self.live_client.start()
             
             self.is_connected = True
