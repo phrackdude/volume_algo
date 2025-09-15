@@ -124,11 +124,13 @@ class DatabentoConnector:
             logger.info(f"📡 Starting live stream for {symbol}")
             
             # Subscribe to live data
+            # Use "parent" for generic symbols like ES.FUT, "raw_symbol" for specific contracts
+            stype = "parent" if symbol == "ES.FUT" else "raw_symbol"
             self.live_client.subscribe(
                 dataset="GLBX.MDP3",
                 schema="ohlcv-1m",
                 symbols=[symbol],
-                stype_in="raw_symbol"  # Use "raw_symbol" for specific contract symbols
+                stype_in=stype
             )
             
             self.is_connected = True
