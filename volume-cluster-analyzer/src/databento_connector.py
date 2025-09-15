@@ -155,7 +155,11 @@ class DatabentoConnector:
                     # Send to callback
                     if self.data_callback:
                         logger.info(f"📤 Sending OHLCV data to callback: {data_row.iloc[0]['close']:.2f}")
-                        self.data_callback(data_row)
+                        try:
+                            self.data_callback(data_row)
+                            logger.info(f"✅ Callback executed successfully")
+                        except Exception as e:
+                            logger.error(f"❌ Callback error: {e}")
                     else:
                         logger.warning("⚠️ No data callback set")
                     return
