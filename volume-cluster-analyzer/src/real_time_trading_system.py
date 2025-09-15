@@ -472,6 +472,7 @@ class RealTimeTradingSystem:
             self.current_data = pd.concat([self.current_data, data]).tail(100)
             
             # Always save current market data for ticker display
+            logger.info(f"💾 Calling save_current_market_data with {len(data)} rows")
             self.save_current_market_data(data)
             
             # Check for volume clusters only during market hours
