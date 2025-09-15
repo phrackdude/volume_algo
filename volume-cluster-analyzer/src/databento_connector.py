@@ -113,6 +113,11 @@ class DatabentoConnector:
     
     async def start_live_stream(self, contract: str):
         """Start live data streaming for specified contract"""
+        # Temporarily enable simulation mode to get ticker working
+        logger.info("📡 Starting simulated live data stream for immediate ticker functionality...")
+        await self._simulate_live_stream(contract)
+        return
+        
         if not DATABENTO_AVAILABLE or not self.live_client:
             logger.info("📡 Starting simulated live data stream...")
             await self._simulate_live_stream(contract)
