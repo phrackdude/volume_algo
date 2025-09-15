@@ -23,3 +23,96 @@
 2025-06-09 21:37:45,098 - INFO -    - Continuous learning enabled
 2025-06-09 21:37:45,098 - INFO - Connecting to Databento API...
 2025-06-09 21:37:46,099 - INFO - ✅ Connected to Databento API
+2025-09-15 13:14:01,129 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-09-15 13:14:01,162 - INFO - V6 Real-Time Trading System initialized
+2025-09-15 13:14:01,162 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-09-15 13:14:01,162 - INFO - V6 Real-Time Trading System initialized
+2025-09-15 13:14:01,162 - INFO - Connecting to Databento API...
+2025-09-15 13:14:01,162 - ERROR - ❌ Databento API key required
+2025-09-15 13:14:01,162 - ERROR - ❌ Failed to initialize Databento connector
+2025-09-15 13:14:01,162 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-09-15 13:14:01,163 - INFO - V6 Real-Time Trading System initialized
+2025-09-15 13:14:01,163 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-09-15 13:14:01,163 - INFO - V6 Real-Time Trading System initialized
+2025-09-15 13:14:48,706 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-09-15 13:14:48,715 - INFO - V6 Real-Time Trading System initialized
+2025-09-15 13:14:48,715 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-09-15 13:14:48,715 - INFO - V6 Real-Time Trading System initialized
+2025-09-15 13:14:48,715 - INFO - Connecting to Databento API...
+2025-09-15 13:14:48,715 - ERROR - ❌ Databento API key required
+2025-09-15 13:14:48,715 - ERROR - ❌ Failed to initialize Databento connector
+2025-09-15 13:14:48,716 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-09-15 13:14:48,716 - INFO - V6 Real-Time Trading System initialized
+2025-09-15 13:14:48,716 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-09-15 13:14:48,716 - INFO - V6 Real-Time Trading System initialized
+2025-09-15 13:15:15,999 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-09-15 13:15:16,011 - INFO - V6 Real-Time Trading System initialized
+2025-09-15 13:15:16,012 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-09-15 13:15:16,012 - INFO - V6 Real-Time Trading System initialized
+2025-09-15 13:15:16,012 - INFO - Connecting to Databento API...
+2025-09-15 13:15:16,012 - ERROR - ❌ Databento API key required
+2025-09-15 13:15:16,012 - ERROR - ❌ Failed to initialize Databento connector
+2025-09-15 13:15:16,013 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-09-15 13:15:16,013 - INFO - V6 Real-Time Trading System initialized
+2025-09-15 13:15:16,013 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-09-15 13:15:16,013 - INFO - V6 Real-Time Trading System initialized
+2025-09-15 13:15:24,354 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-09-15 13:15:24,363 - INFO - V6 Real-Time Trading System initialized
+2025-09-15 13:15:24,363 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-09-15 13:15:24,363 - INFO - V6 Real-Time Trading System initialized
+2025-09-15 13:15:24,363 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-09-15 13:15:24,363 - INFO - V6 Real-Time Trading System initialized
+2025-09-15 13:15:24,363 - INFO - Connecting to Databento API...
+2025-09-15 13:15:24,363 - INFO - Initialized Historical(gateway=https://hist.databento.com)
+2025-09-15 13:15:24,363 - INFO - ✅ Databento clients initialized
+2025-09-15 13:15:24,364 - INFO - ✅ Connected to Databento API
+2025-09-15 13:15:24,364 - INFO - 📈 Fetching historical data: ES.FUT from 2025-09-14 13:15:24.364031 to 2025-09-15 13:15:24.364034
+2025-09-15 13:15:24,737 - ERROR - ❌ Failed to get historical data: 422 data_end_after_available_end
+The dataset GLBX.MDP3 has data available up to '2025-09-15 11:10:00+00:00'. The `end` in the query ('2025-09-15 13:15:24.364034+00:00') is after the available range. Try requesting with an earlier `end`.
+documentation: https://databento.com/docs/api-reference-historical/basics/datasets
+2025-09-15 13:15:24,759 - INFO - 🔮 Simulated historical data: 1441 records
+2025-09-15 13:15:24,761 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-09-15 13:15:24,761 - INFO - V6 Real-Time Trading System initialized
+2025-09-15 13:15:24,761 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-09-15 13:15:24,761 - INFO - V6 Real-Time Trading System initialized
+2025-09-15 13:15:24,775 - INFO - terminating live client
+2025-09-15 13:27:30,214 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-09-15 13:27:30,237 - INFO - V6 Real-Time Trading System initialized
+2025-09-15 13:27:30,237 - INFO - Paper trading database initialized: ../data/paper_trades.db
+2025-09-15 13:27:30,237 - INFO - 💰 Starting Portfolio: $100,000.00
+2025-09-15 13:27:30,237 - INFO - 💸 Transaction Costs: $2.5/contract + 0.75 ticks slippage
+2025-09-15 13:27:30,239 - INFO - Recorded trade: modal_bin[0] = 0.0017 (WIN)
+2025-09-15 13:27:30,239 - INFO - 📊 Position sizing: Risk=1.8% ($1750), Bayesian=1.50x, Final size=1 contracts
+2025-09-15 13:27:30,239 - ERROR - Risk management test failed: 
+2025-09-15 13:27:30,240 - INFO - Recorded trade: modal_bin[0] = 0.0016 (WIN)
+2025-09-15 13:27:30,241 - ERROR - Trade execution test failed: table paper_trades has no column named gross_pnl
+2025-09-15 13:27:30,241 - ERROR - Performance metrics test failed: 
+2025-09-15 13:28:27,681 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-09-15 13:28:27,693 - INFO - V6 Real-Time Trading System initialized
+2025-09-15 13:28:27,694 - INFO - Added column gross_pnl to paper_trades table
+2025-09-15 13:28:27,694 - INFO - Added column commission_cost to paper_trades table
+2025-09-15 13:28:27,695 - INFO - Added column slippage_cost to paper_trades table
+2025-09-15 13:28:27,695 - INFO - Added column total_transaction_costs to paper_trades table
+2025-09-15 13:28:27,695 - INFO - Added column exit_reason to paper_trades table
+2025-09-15 13:28:27,695 - INFO - Paper trading database initialized: ../data/paper_trades.db
+2025-09-15 13:28:27,695 - INFO - 💰 Starting Portfolio: $100,000.00
+2025-09-15 13:28:27,695 - INFO - 💸 Transaction Costs: $2.5/contract + 0.75 ticks slippage
+2025-09-15 13:28:27,696 - INFO - Recorded trade: modal_bin[0] = 0.0017 (WIN)
+2025-09-15 13:28:27,696 - ERROR - Bayesian learning test failed: 
+2025-09-15 13:28:27,696 - INFO - 📊 Position sizing: Risk=1.8% ($1750), Bayesian=1.50x, Final size=1 contracts
+2025-09-15 13:28:27,696 - ERROR - Risk management test failed: 
+2025-09-15 13:28:27,697 - INFO - Recorded trade: modal_bin[0] = 0.0016 (WIN)
+2025-09-15 13:28:27,698 - ERROR - Trade execution test failed: 26 values for 27 columns
+2025-09-15 13:29:08,508 - INFO - Bayesian stats database initialized: ../data/bayesian_stats.db
+2025-09-15 13:29:08,519 - INFO - V6 Real-Time Trading System initialized
+2025-09-15 13:29:08,519 - INFO - Paper trading database initialized: ../data/paper_trades.db
+2025-09-15 13:29:08,519 - INFO - 💰 Starting Portfolio: $100,000.00
+2025-09-15 13:29:08,519 - INFO - 💸 Transaction Costs: $2.5/contract + 0.75 ticks slippage
+2025-09-15 13:29:08,520 - ERROR - Bayesian learning test failed: 
+2025-09-15 13:29:08,520 - INFO - 📊 Position sizing: Risk=1.8% ($1750), Bayesian=1.50x, Final size=1 contracts
+2025-09-15 13:29:08,520 - ERROR - Risk management test failed: 
+2025-09-15 13:29:08,521 - INFO - Recorded trade: modal_bin[0] = 0.0016 (WIN)
+2025-09-15 13:29:08,522 - INFO - 🔚 Trade closed: TEST_003
+2025-09-15 13:29:08,522 - INFO -    P&L: $461.41 | Reason: PROFIT_TARGET
+2025-09-15 13:29:08,522 - INFO -    📊 Running Stats: 1/1 wins (100.0%)
+2025-09-15 13:29:08,522 - INFO -    💰 Total P&L: $461.41 | Avg: $461.41

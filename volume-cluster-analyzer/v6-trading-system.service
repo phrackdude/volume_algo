@@ -1,0 +1,32 @@
+[Unit]
+Description=V6 Bayesian Volume Cluster Trading System
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/v6-trading-system
+Environment=PATH=/opt/v6-trading-system/venv/bin
+ExecStart=/opt/v6-trading-system/venv/bin/python /opt/v6-trading-system/launch_automated_trading.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=v6-trading-system
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/v6-trading-system/data
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=2G
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

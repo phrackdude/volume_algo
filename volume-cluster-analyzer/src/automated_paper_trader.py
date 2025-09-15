@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class PaperTrade:
-    """Paper trade execution record"""
+    """Paper trade execution record with V6 transaction cost tracking"""
     trade_id: str
     timestamp: datetime
     signal_time: datetime
@@ -49,6 +49,10 @@ class PaperTrade:
     exit_price: Optional[float] = None
     exit_time: Optional[datetime] = None
     pnl: Optional[float] = None
+    gross_pnl: Optional[float] = None
+    commission_cost: Optional[float] = None
+    slippage_cost: Optional[float] = None
+    total_transaction_costs: Optional[float] = None
     status: str = "OPEN"  # OPEN, CLOSED, STOPPED
     volume_ratio: float = 0.0
     signal_strength: float = 0.0
@@ -57,6 +61,7 @@ class PaperTrade:
     portfolio_balance_before: Optional[float] = None
     portfolio_balance_after: Optional[float] = None
     portfolio_pct_change: Optional[float] = None
+    exit_reason: Optional[str] = None
 
 class RealisticExecutionSimulator:
     """Simulates realistic order execution with market microstructure"""
@@ -143,9 +148,9 @@ class RealisticExecutionSimulator:
         return trade
 
 class AutomatedPaperTrader:
-    """Fully automated paper trading system"""
+    """Fully automated paper trading system with $100,000 portfolio"""
     
-    def __init__(self, starting_balance: float = 15000.0):
+    def __init__(self, starting_balance: float = 100000.0):
         self.trading_system = RealTimeTradingSystem()
         self.executor = RealisticExecutionSimulator()
         self.open_trades: List[PaperTrade] = []
@@ -159,6 +164,13 @@ class AutomatedPaperTrader:
         self.max_balance = starting_balance
         self.max_drawdown_pct = 0.0
         
+        # V6 Transaction costs (matching backtest structure)
+        self.commission_per_contract = 2.50  # $2.50 per contract per side
+        self.slippage_ticks = 0.75  # 0.75 ticks slippage
+        self.tick_value = 12.50  # $12.50 per tick for ES
+        self.total_commission_paid = 0.0
+        self.total_slippage_cost = 0.0
+        
         self.init_paper_trading_db()
         
         # Performance tracking
@@ -167,40 +179,117 @@ class AutomatedPaperTrader:
         self.total_pnl = 0.0
         self.total_slippage = 0.0
         
+        # Advanced performance metrics
+        self.daily_returns: List[float] = []
+        self.trade_returns: List[float] = []
+        self.max_consecutive_wins = 0
+        self.max_consecutive_losses = 0
+        self.current_consecutive_wins = 0
+        self.current_consecutive_losses = 0
+        self.sharpe_ratio = 0.0
+        self.sortino_ratio = 0.0
+        self.calmar_ratio = 0.0
+        
         logger.info(f"💰 Starting Portfolio: ${self.starting_balance:,.2f}")
+        logger.info(f"💸 Transaction Costs: ${self.commission_per_contract}/contract + {self.slippage_ticks} ticks slippage")
+    
+    def calculate_advanced_metrics(self):
+        """Calculate advanced performance metrics"""
+        if len(self.trade_returns) < 2:
+            return
+        
+        # Calculate Sharpe ratio (assuming 0% risk-free rate for simplicity)
+        returns_array = np.array(self.trade_returns)
+        mean_return = np.mean(returns_array)
+        std_return = np.std(returns_array)
+        
+        if std_return > 0:
+            self.sharpe_ratio = mean_return / std_return * np.sqrt(252)  # Annualized
+        
+        # Calculate Sortino ratio (downside deviation)
+        downside_returns = returns_array[returns_array < 0]
+        if len(downside_returns) > 0:
+            downside_std = np.std(downside_returns)
+            if downside_std > 0:
+                self.sortino_ratio = mean_return / downside_std * np.sqrt(252)
+        
+        # Calculate Calmar ratio (return / max drawdown)
+        if self.max_drawdown_pct > 0:
+            annual_return = ((self.current_balance - self.starting_balance) / self.starting_balance) * 100
+            self.calmar_ratio = annual_return / self.max_drawdown_pct
+    
+    def update_consecutive_stats(self, trade_pnl: float):
+        """Update consecutive win/loss statistics"""
+        if trade_pnl > 0:
+            self.current_consecutive_wins += 1
+            self.current_consecutive_losses = 0
+            self.max_consecutive_wins = max(self.max_consecutive_wins, self.current_consecutive_wins)
+        else:
+            self.current_consecutive_losses += 1
+            self.current_consecutive_wins = 0
+            self.max_consecutive_losses = max(self.max_consecutive_losses, self.current_consecutive_losses)
     
     def init_paper_trading_db(self):
-        """Initialize paper trading database"""
+        """Initialize paper trading database with schema migration"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS paper_trades (
-                trade_id TEXT PRIMARY KEY,
-                timestamp DATETIME,
-                signal_time DATETIME,
-                execution_time DATETIME,
-                contract TEXT,
-                action TEXT,
-                quantity INTEGER,
-                signal_price REAL,
-                execution_price REAL,
-                slippage REAL,
-                spread REAL,
-                exit_price REAL,
-                exit_time DATETIME,
-                pnl REAL,
-                status TEXT,
-                volume_ratio REAL,
-                signal_strength REAL,
-                bayesian_multiplier REAL,
-                confidence REAL,
-                portfolio_balance_before REAL,
-                portfolio_balance_after REAL,
-                portfolio_pct_change REAL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
+        # Check if table exists and get its schema
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='paper_trades'")
+        table_exists = cursor.fetchone() is not None
+        
+        if table_exists:
+            # Check if new columns exist
+            cursor.execute("PRAGMA table_info(paper_trades)")
+            columns = [row[1] for row in cursor.fetchall()]
+            
+            # Add missing columns if they don't exist
+            new_columns = [
+                ('gross_pnl', 'REAL'),
+                ('commission_cost', 'REAL'),
+                ('slippage_cost', 'REAL'),
+                ('total_transaction_costs', 'REAL'),
+                ('exit_reason', 'TEXT')
+            ]
+            
+            for col_name, col_type in new_columns:
+                if col_name not in columns:
+                    cursor.execute(f'ALTER TABLE paper_trades ADD COLUMN {col_name} {col_type}')
+                    logger.info(f"Added column {col_name} to paper_trades table")
+        else:
+            # Create new table with full schema
+            cursor.execute('''
+                CREATE TABLE paper_trades (
+                    trade_id TEXT PRIMARY KEY,
+                    timestamp DATETIME,
+                    signal_time DATETIME,
+                    execution_time DATETIME,
+                    contract TEXT,
+                    action TEXT,
+                    quantity INTEGER,
+                    signal_price REAL,
+                    execution_price REAL,
+                    slippage REAL,
+                    spread REAL,
+                    exit_price REAL,
+                    exit_time DATETIME,
+                    pnl REAL,
+                    gross_pnl REAL,
+                    commission_cost REAL,
+                    slippage_cost REAL,
+                    total_transaction_costs REAL,
+                    status TEXT,
+                    volume_ratio REAL,
+                    signal_strength REAL,
+                    bayesian_multiplier REAL,
+                    confidence REAL,
+                    portfolio_balance_before REAL,
+                    portfolio_balance_after REAL,
+                    portfolio_pct_change REAL,
+                    exit_reason TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
         
         # Portfolio equity curve table
         cursor.execute('''
@@ -219,25 +308,37 @@ class AutomatedPaperTrader:
         logger.info(f"Paper trading database initialized: {self.db_path}")
     
     def calculate_position_size(self, recommendation: TradingRecommendation) -> int:
-        """Calculate position size based on portfolio balance and risk management"""
+        """Calculate position size based on portfolio balance and V6 Bayesian risk management"""
         
-        # Risk 1-2% of portfolio per trade based on Bayesian confidence
+        # V6 Risk management: 1-2% of portfolio per trade based on Bayesian confidence
         risk_pct = 0.01 + (recommendation.confidence * 0.01)  # 1-2% risk
         risk_amount = self.current_balance * risk_pct
         
-        # ES futures: $50 per point, typical stop is ~20 points
-        stop_loss_points = 20
-        dollars_per_contract = stop_loss_points * 50  # $1000 risk per contract
+        # ES futures: $50 per point, typical stop is ~15-20 points (tighter stops from V6)
+        stop_loss_points = 15  # Tighter stops as per V6 strategy
+        dollars_per_contract = stop_loss_points * 50  # $750 risk per contract
         
         # Calculate max contracts based on risk
         max_contracts = int(risk_amount / dollars_per_contract)
         
-        # Apply Bayesian multiplier but cap at reasonable size
-        contracts = max(1, min(max_contracts, int(recommendation.quantity * recommendation.bayesian_multiplier)))
+        # Apply V6 Bayesian multiplier with proper scaling
+        base_quantity = recommendation.quantity
+        bayesian_quantity = int(base_quantity * recommendation.bayesian_multiplier)
         
-        # Don't risk more than 10% of portfolio on a single trade
-        max_position_value = self.current_balance * 0.10
-        contracts = min(contracts, int(max_position_value / (recommendation.price * 50)))
+        # Cap at risk-based maximum
+        contracts = max(1, min(max_contracts, bayesian_quantity))
+        
+        # Additional safety: don't risk more than 5% of portfolio on a single trade
+        max_risk_amount = self.current_balance * 0.05
+        max_contracts_by_risk = int(max_risk_amount / dollars_per_contract)
+        contracts = min(contracts, max_contracts_by_risk)
+        
+        # For $100k portfolio, reasonable position sizes are 1-5 contracts typically
+        contracts = min(contracts, 5)  # Cap at 5 contracts max
+        
+        logger.info(f"📊 Position sizing: Risk={risk_pct:.1%} (${risk_amount:.0f}), "
+                   f"Bayesian={recommendation.bayesian_multiplier:.2f}x, "
+                   f"Final size={contracts} contracts")
         
         return max(1, contracts)
     
@@ -300,33 +401,56 @@ class AutomatedPaperTrader:
         
         trade_dict = asdict(trade)
         
+        # Prepare values with proper handling of None values
+        values = (
+            trade.trade_id, trade.timestamp, trade.signal_time, trade.execution_time,
+            trade.contract, trade.action, trade.quantity, trade.signal_price,
+            trade.execution_price, trade.slippage, trade.spread, trade.exit_price,
+            trade.exit_time, trade.pnl, trade.gross_pnl, trade.commission_cost, 
+            trade.slippage_cost, trade.total_transaction_costs, trade.status, 
+            trade.volume_ratio, trade.signal_strength, trade.bayesian_multiplier, 
+            trade.confidence, trade.portfolio_balance_before, trade.portfolio_balance_after, 
+            trade.portfolio_pct_change, trade.exit_reason
+        )
+        
         cursor.execute('''
             INSERT OR REPLACE INTO paper_trades 
             (trade_id, timestamp, signal_time, execution_time, contract, action, 
              quantity, signal_price, execution_price, slippage, spread, 
-             exit_price, exit_time, pnl, status, volume_ratio, signal_strength, 
+             exit_price, exit_time, pnl, gross_pnl, commission_cost, slippage_cost, 
+             total_transaction_costs, status, volume_ratio, signal_strength, 
              bayesian_multiplier, confidence, portfolio_balance_before, portfolio_balance_after, 
-             portfolio_pct_change)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            trade.trade_id, trade.timestamp, trade.signal_time, trade.execution_time,
-            trade.contract, trade.action, trade.quantity, trade.signal_price,
-            trade.execution_price, trade.slippage, trade.spread, trade.exit_price,
-            trade.exit_time, trade.pnl, trade.status, trade.volume_ratio,
-            trade.signal_strength, trade.bayesian_multiplier, trade.confidence,
-            trade.portfolio_balance_before, trade.portfolio_balance_after, trade.portfolio_pct_change
-        ))
+             portfolio_pct_change, exit_reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', values)
         
         conn.commit()
         conn.close()
     
     def simulate_exit_conditions(self, trade: PaperTrade, current_price: float) -> Optional[tuple]:
-        """Check if trade should be closed (profit target or stop loss)"""
+        """Enhanced V6 risk management with dynamic stop losses and profit targets"""
+        
+        # Calculate dynamic risk parameters based on V6 strategy
+        volatility = 0.01  # Simplified volatility estimate
+        base_stop_distance = 0.015  # 1.5% base stop
+        base_profit_distance = 0.03  # 3% base profit target (2:1 ratio)
+        
+        # Adjust based on signal strength and confidence
+        signal_adjustment = 1.0 + (trade.signal_strength - 0.5) * 0.5  # 0.75x to 1.25x
+        confidence_adjustment = 1.0 + (trade.confidence - 0.5) * 0.5   # 0.75x to 1.25x
+        
+        # Apply adjustments
+        stop_distance = base_stop_distance * signal_adjustment * confidence_adjustment
+        profit_distance = base_profit_distance * signal_adjustment * confidence_adjustment
+        
+        # Ensure minimum and maximum bounds
+        stop_distance = max(0.005, min(stop_distance, 0.025))  # 0.5% to 2.5%
+        profit_distance = max(0.01, min(profit_distance, 0.05))  # 1% to 5%
         
         if trade.action in ["BUY", "LONG"]:
             # Long position
-            profit_target = trade.execution_price * 1.015  # 1.5% profit target
-            stop_loss = trade.execution_price * 0.985      # 1.5% stop loss
+            profit_target = trade.execution_price * (1 + profit_distance)
+            stop_loss = trade.execution_price * (1 - stop_distance)
             
             if current_price >= profit_target:
                 return current_price, "PROFIT_TARGET"
@@ -334,40 +458,114 @@ class AutomatedPaperTrader:
                 return current_price, "STOP_LOSS"
                 
         else:  # SHORT position
-            profit_target = trade.execution_price * 0.985  # 1.5% profit target
-            stop_loss = trade.execution_price * 1.015      # 1.5% stop loss
+            profit_target = trade.execution_price * (1 - profit_distance)
+            stop_loss = trade.execution_price * (1 + stop_distance)
             
             if current_price <= profit_target:
                 return current_price, "PROFIT_TARGET"
             elif current_price >= stop_loss:
                 return current_price, "STOP_LOSS"
         
-        # Time-based exit (hold for max 4 hours)
-        if (datetime.now() - trade.execution_time).total_seconds() > 14400:  # 4 hours
+        # Time-based exit (hold for max 6 hours for V6 strategy)
+        max_hold_time = 21600  # 6 hours
+        if (datetime.now() - trade.execution_time).total_seconds() > max_hold_time:
             return current_price, "TIME_EXIT"
+        
+        # Portfolio protection: emergency stop if portfolio drawdown exceeds 5%
+        if self.max_drawdown_pct > 5.0:
+            return current_price, "EMERGENCY_STOP"
             
         return None
     
+    def should_stop_trading(self) -> bool:
+        """Check if trading should be stopped due to risk management rules"""
+        
+        # Stop if portfolio drawdown exceeds 10%
+        if self.max_drawdown_pct > 10.0:
+            logger.warning(f"🛑 Portfolio drawdown {self.max_drawdown_pct:.1f}% exceeds 10% limit")
+            return True
+        
+        # Stop if too many consecutive losses
+        if self.current_consecutive_losses >= 5:
+            logger.warning(f"🛑 {self.current_consecutive_losses} consecutive losses - stopping trading")
+            return True
+        
+        # Stop if daily loss exceeds 3% of portfolio
+        today = datetime.now().date()
+        today_trades = [t for t in self.closed_trades if t.exit_time and t.exit_time.date() == today]
+        today_pnl = sum([t.pnl for t in today_trades])
+        today_loss_pct = abs(today_pnl) / self.starting_balance * 100 if today_pnl < 0 else 0
+        
+        if today_loss_pct > 3.0:
+            logger.warning(f"🛑 Daily loss {today_loss_pct:.1f}% exceeds 3% limit")
+            return True
+        
+        # Stop if too many open positions (risk concentration)
+        if len(self.open_trades) >= 3:
+            logger.warning(f"🛑 Too many open positions ({len(self.open_trades)}) - stopping new trades")
+            return True
+        
+        return False
+    
     async def close_trade(self, trade: PaperTrade, exit_price: float, exit_reason: str):
-        """Close a trade and record results"""
+        """Close a trade and record results with proper V6 transaction costs"""
         
         trade.exit_price = exit_price
         trade.exit_time = datetime.now()
         trade.status = "CLOSED"
         
-        # Calculate P&L
+        # Calculate gross P&L (before transaction costs)
         if trade.action in ["BUY", "LONG"]:
-            trade.pnl = (exit_price - trade.execution_price) * trade.quantity * 50  # ES = $50/point
+            gross_pnl = (exit_price - trade.execution_price) * trade.quantity * 50  # ES = $50/point
         else:  # SHORT
-            trade.pnl = (trade.execution_price - exit_price) * trade.quantity * 50
+            gross_pnl = (trade.execution_price - exit_price) * trade.quantity * 50
+        
+        # Calculate V6 transaction costs
+        # Entry costs: commission + slippage
+        entry_commission = self.commission_per_contract * trade.quantity
+        entry_slippage_cost = abs(trade.slippage) * self.tick_value * trade.quantity
+        
+        # Exit costs: commission + slippage (simulate exit slippage)
+        exit_commission = self.commission_per_contract * trade.quantity
+        exit_slippage = self.slippage_ticks * 0.25  # 0.75 ticks * $0.25 per tick
+        exit_slippage_cost = exit_slippage * self.tick_value * trade.quantity
+        
+        # Total transaction costs
+        total_commission = entry_commission + exit_commission
+        total_slippage_cost = entry_slippage_cost + exit_slippage_cost
+        total_transaction_costs = total_commission + total_slippage_cost
+        
+        # Net P&L after transaction costs
+        trade.pnl = gross_pnl - total_transaction_costs
+        
+        # Store transaction cost details in trade record
+        trade.gross_pnl = gross_pnl
+        trade.commission_cost = total_commission
+        trade.slippage_cost = total_slippage_cost
+        trade.total_transaction_costs = total_transaction_costs
+        trade.exit_reason = exit_reason
+        
+        # Update transaction cost tracking
+        self.total_commission_paid += total_commission
+        self.total_slippage_cost += total_slippage_cost
         
         # Update statistics
         self.total_trades += 1
         self.total_pnl += trade.pnl
-        self.total_slippage += abs(trade.slippage) * trade.quantity * 50
+        self.total_slippage += total_slippage_cost
         
         if trade.pnl > 0:
             self.winning_trades += 1
+        
+        # Track trade return for advanced metrics
+        trade_return_pct = trade.pnl / trade.portfolio_balance_before if trade.portfolio_balance_before else 0
+        self.trade_returns.append(trade_return_pct)
+        
+        # Update consecutive statistics
+        self.update_consecutive_stats(trade.pnl)
+        
+        # Calculate advanced metrics
+        self.calculate_advanced_metrics()
         
         # Calculate modal bin context for Bayesian feedback
         modal_position = abs(trade.execution_price - trade.signal_price) / trade.execution_price
@@ -406,20 +604,25 @@ class AutomatedPaperTrader:
             play_alert_sound("signal")  # Winning trade
         
     def print_performance_summary(self):
-        """Print current performance summary with portfolio tracking"""
+        """Print current performance summary with portfolio tracking and V6 transaction costs"""
         if self.total_trades == 0:
             return
             
         win_rate = (self.winning_trades / self.total_trades) * 100
         avg_pnl = self.total_pnl / self.total_trades
-        avg_slippage = self.total_slippage / self.total_trades
+        avg_commission = self.total_commission_paid / self.total_trades if self.total_trades > 0 else 0
+        avg_slippage_cost = self.total_slippage_cost / self.total_trades if self.total_trades > 0 else 0
         
         # Portfolio metrics
         total_return = ((self.current_balance - self.starting_balance) / self.starting_balance) * 100
         
-        print("\n" + "="*60)
-        print("📊 AUTOMATED PAPER TRADING PERFORMANCE")
-        print("="*60)
+        # Calculate gross P&L (before transaction costs)
+        gross_pnl = self.total_pnl + self.total_commission_paid + self.total_slippage_cost
+        transaction_cost_impact = (self.total_commission_paid + self.total_slippage_cost) / abs(gross_pnl) * 100 if gross_pnl != 0 else 0
+        
+        print("\n" + "="*70)
+        print("📊 V6 BAYESIAN PAPER TRADING PERFORMANCE")
+        print("="*70)
         print(f"💰 PORTFOLIO STATUS:")
         print(f"   Starting Balance: ${self.starting_balance:,.2f}")
         print(f"   Current Balance:  ${self.current_balance:,.2f}")
@@ -429,20 +632,36 @@ class AutomatedPaperTrader:
         print(f"📈 TRADING STATS:")
         print(f"   Total Trades: {self.total_trades}")
         print(f"   Win Rate: {win_rate:.1f}% ({self.winning_trades} wins)")
-        print(f"   Total P&L: ${self.total_pnl:,.2f}")
+        print(f"   Net P&L: ${self.total_pnl:,.2f}")
+        print(f"   Gross P&L: ${gross_pnl:,.2f}")
         print(f"   Average P&L: ${avg_pnl:.2f}")
-        print(f"   Average Slippage: ${avg_slippage:.2f}")
         print(f"   Open Positions: {len(self.open_trades)}")
-        print("="*60)
+        print()
+        print(f"💸 V6 TRANSACTION COSTS:")
+        print(f"   Total Commission: ${self.total_commission_paid:,.2f}")
+        print(f"   Total Slippage:   ${self.total_slippage_cost:,.2f}")
+        print(f"   Avg Commission:   ${avg_commission:.2f}/trade")
+        print(f"   Avg Slippage:     ${avg_slippage_cost:.2f}/trade")
+        print(f"   Cost Impact:      {transaction_cost_impact:.1f}% of gross P&L")
+        print()
+        print(f"📊 ADVANCED METRICS:")
+        print(f"   Sharpe Ratio:     {self.sharpe_ratio:.2f}")
+        print(f"   Sortino Ratio:    {self.sortino_ratio:.2f}")
+        print(f"   Calmar Ratio:     {self.calmar_ratio:.2f}")
+        print(f"   Max Consecutive Wins:  {self.max_consecutive_wins}")
+        print(f"   Max Consecutive Losses: {self.max_consecutive_losses}")
+        print("="*70)
     
     async def run_automated_trading(self):
-        """Main automated trading loop"""
-        logger.info("🤖 Starting Automated Paper Trading System")
+        """Main automated trading loop with V6 Bayesian strategy"""
+        logger.info("🤖 Starting V6 Bayesian Automated Paper Trading System")
         logger.info(f"💰 Initial Portfolio: ${self.starting_balance:,.2f}")
         logger.info("   - 20-second execution delays")
         logger.info("   - Realistic offer-side fills")
-        logger.info("   - Portfolio-based position sizing")
-        logger.info("   - Automatic Bayesian feedback")
+        logger.info("   - V6 Bayesian position sizing")
+        logger.info("   - $2.50 commission + 0.75 tick slippage per contract")
+        logger.info("   - Automatic Bayesian learning from trade results")
+        logger.info("   - Portfolio-based risk management (1-2% per trade)")
         logger.info("   - Continuous learning enabled")
         
         # Connect to data feed
@@ -475,6 +694,12 @@ class AutomatedPaperTrader:
                     self.trading_system.current_data, 
                     simulated_data
                 ]).tail(100)
+                
+                # Risk management checks
+                if self.should_stop_trading():
+                    logger.warning("🛑 Risk management triggered - stopping new trades")
+                    await asyncio.sleep(300)  # Wait 5 minutes before checking again
+                    continue
                 
                 # Check for new signals
                 cluster = self.trading_system.detect_volume_cluster(self.trading_system.current_data)
@@ -512,9 +737,13 @@ class AutomatedPaperTrader:
                         exit_price, exit_reason = exit_result
                         await self.close_trade(trade, exit_price, exit_reason)
                 
-                # Print performance summary every 10 trades
+                # Print performance summary every 5 trades
                 if self.total_trades > 0 and self.total_trades % 5 == 0:
                     self.print_performance_summary()
+                    
+                    # Print Bayesian learning summary every 10 trades
+                    if self.total_trades % 10 == 0:
+                        self.trading_system.bayesian_manager.print_bayesian_summary()
                 
             except Exception as e:
                 logger.error(f"Error in automated trading loop: {e}")
@@ -526,14 +755,19 @@ async def main():
     await trader.run_automated_trading()
 
 if __name__ == "__main__":
-    print("🤖 AUTOMATED V6 PAPER TRADING SYSTEM")
-    print("="*50)
-    print("Features:")
-    print("- 20-second execution delays")
-    print("- Realistic offer-side fills")
-    print("- Automatic Bayesian learning")
-    print("- Continuous operation")
-    print("="*50)
+    print("🤖 V6 BAYESIAN AUTOMATED PAPER TRADING SYSTEM")
+    print("="*60)
+    print("💰 Portfolio: $100,000")
+    print("📊 Strategy: V6 Bayesian Volume Cluster")
+    print("⏱️  Features:")
+    print("   - 20-second execution delays")
+    print("   - Realistic offer-side fills")
+    print("   - $2.50 commission + 0.75 tick slippage")
+    print("   - V6 Bayesian position sizing")
+    print("   - Automatic learning from trade results")
+    print("   - Portfolio-based risk management")
+    print("   - Continuous operation")
+    print("="*60)
     
     try:
         asyncio.run(main())

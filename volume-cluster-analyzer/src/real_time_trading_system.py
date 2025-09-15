@@ -18,6 +18,11 @@ from pathlib import Path
 import os
 import platform
 import subprocess
+import pytz
+
+# Import our custom modules
+from databento_connector import DatabentoConnector
+from config import config, load_config_from_file
 
 # Configure logging
 logging.basicConfig(
@@ -153,32 +158,57 @@ class BayesianStatsManager:
         logger.info(f"Bayesian stats database initialized: {self.db_path}")
     
     def get_context_stats(self, context_type: str, context_value: int, min_trades: int = 3) -> Dict:
-        """Get Bayesian statistics for a specific context"""
+        """Get enhanced Bayesian statistics for a specific context with rolling performance"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
+        # Get all-time stats
         cursor.execute('''
             SELECT COUNT(*) as total_trades,
                    SUM(win) as wins,
                    AVG(return_pct) as avg_return,
-                   STDDEV(return_pct) as return_std
+                   MIN(return_pct) as min_return,
+                   MAX(return_pct) as max_return,
+                   AVG(CASE WHEN win = 1 THEN return_pct ELSE NULL END) as avg_win_return,
+                   AVG(CASE WHEN win = 0 THEN return_pct ELSE NULL END) as avg_loss_return
             FROM context_performance 
             WHERE context_type = ? AND context_value = ?
         ''', (context_type, context_value))
         
         result = cursor.fetchone()
+        
+        # Get recent performance (last 30 days)
+        cursor.execute('''
+            SELECT COUNT(*) as recent_trades,
+                   SUM(win) as recent_wins,
+                   AVG(return_pct) as recent_avg_return
+            FROM context_performance 
+            WHERE context_type = ? AND context_value = ?
+            AND trade_timestamp >= datetime('now', '-30 days')
+        ''', (context_type, context_value))
+        
+        recent_result = cursor.fetchone()
         conn.close()
         
         if result and result[0] >= min_trades:
-            total_trades, wins, avg_return, return_std = result
+            total_trades, wins, avg_return, min_return, max_return, avg_win_return, avg_loss_return = result
+            recent_trades, recent_wins, recent_avg_return = recent_result
+            
             losses = total_trades - wins
+            recent_losses = recent_trades - recent_wins if recent_trades else 0
             
             # Calculate Bayesian posterior parameters
-            alpha_post = 1.0 + wins  # Prior alpha = 1.0
-            beta_post = 1.0 + losses  # Prior beta = 1.0
+            alpha_post = config.alpha_prior + wins
+            beta_post = config.beta_prior + losses
             
             # Expected win probability
             expected_p = alpha_post / (alpha_post + beta_post)
+            
+            # Calculate confidence interval (simplified)
+            confidence_interval = 1.96 * np.sqrt(expected_p * (1 - expected_p) / total_trades) if total_trades > 0 else 0
+            
+            # Recent performance weight (more recent trades get higher weight)
+            recent_weight = min(recent_trades / 10.0, 1.0) if recent_trades else 0
             
             return {
                 'total_trades': total_trades,
@@ -186,31 +216,84 @@ class BayesianStatsManager:
                 'losses': losses,
                 'expected_p': expected_p,
                 'avg_return': avg_return or 0,
-                'return_std': return_std or 0,
+                'min_return': min_return or 0,
+                'max_return': max_return or 0,
+                'avg_win_return': avg_win_return or 0,
+                'avg_loss_return': avg_loss_return or 0,
                 'alpha_post': alpha_post,
-                'beta_post': beta_post
+                'beta_post': beta_post,
+                'confidence_interval': confidence_interval,
+                'recent_trades': recent_trades,
+                'recent_wins': recent_wins,
+                'recent_win_rate': recent_wins / recent_trades if recent_trades > 0 else 0,
+                'recent_avg_return': recent_avg_return or 0,
+                'recent_weight': recent_weight
             }
         
         return None
     
-    def calculate_bayesian_multiplier(self, context_type: str, context_value: int) -> float:
-        """Calculate Bayesian position sizing multiplier"""
+    def calculate_bayesian_multiplier(self, context_type: str, context_value: int) -> tuple[float, dict]:
+        """Calculate enhanced Bayesian position sizing multiplier with recent performance weighting"""
         stats = self.get_context_stats(context_type, context_value)
         
         if stats is None:
-            return 1.0  # Conservative default
+            # No historical data - use conservative prior
+            return 1.0, {
+                "method": "insufficient_data", 
+                "expected_p": 0.5, 
+                "alpha": config.alpha_prior,
+                "beta": config.beta_prior,
+                "total_trades": 0,
+                "confidence": "low"
+            }
         
-        expected_p = stats['expected_p']
-        
-        # V6 Bayesian parameters
-        SCALING_FACTOR = 6.0
-        MAX_MULTIPLIER = 3.0
-        
-        if expected_p > 0.5:
-            raw_multiplier = 1.0 + (expected_p - 0.5) * SCALING_FACTOR
-            return min(raw_multiplier, MAX_MULTIPLIER)
+        # Use recent performance if available, otherwise use all-time
+        if stats['recent_trades'] >= 3:
+            # Weight recent performance more heavily
+            recent_weight = stats['recent_weight']
+            all_time_p = stats['expected_p']
+            recent_p = stats['recent_win_rate']
+            
+            # Blend recent and all-time performance
+            expected_p = (recent_weight * recent_p) + ((1 - recent_weight) * all_time_p)
+            confidence = "high" if stats['recent_trades'] >= 10 else "medium"
         else:
-            return 1.0
+            expected_p = stats['expected_p']
+            confidence = "medium" if stats['total_trades'] >= 20 else "low"
+        
+        # V6 Bayesian parameters from config
+        if expected_p > 0.5:
+            raw_multiplier = 1.0 + (expected_p - 0.5) * config.bayesian_scaling_factor
+            position_multiplier = min(raw_multiplier, config.bayesian_max_multiplier)
+        else:
+            # Conservative sizing for below-50% win rate contexts
+            position_multiplier = 1.0
+            raw_multiplier = 1.0
+        
+        # Adjust multiplier based on confidence
+        if confidence == "low":
+            position_multiplier = min(position_multiplier, 1.5)  # Cap at 1.5x for low confidence
+        elif confidence == "medium":
+            position_multiplier = min(position_multiplier, 2.0)  # Cap at 2.0x for medium confidence
+        
+        # Diagnostic information
+        diagnostics = {
+            "method": "enhanced_bayesian",
+            "expected_p": expected_p,
+            "all_time_p": stats['expected_p'],
+            "recent_p": stats['recent_win_rate'] if stats['recent_trades'] > 0 else None,
+            "recent_weight": stats['recent_weight'],
+            "alpha": stats['alpha_post'],
+            "beta": stats['beta_post'],
+            "total_trades": stats['total_trades'],
+            "recent_trades": stats['recent_trades'],
+            "raw_multiplier": raw_multiplier,
+            "capped_multiplier": position_multiplier,
+            "confidence": confidence,
+            "confidence_interval": stats['confidence_interval']
+        }
+        
+        return position_multiplier, diagnostics
     
     def record_trade_result(self, context_type: str, context_value: int, 
                           entry_price: float, exit_price: float, 
@@ -234,36 +317,195 @@ class BayesianStatsManager:
         conn.close()
         
         logger.info(f"Recorded trade: {context_type}[{context_value}] = {return_pct:.4f} ({'WIN' if win else 'LOSS'})")
+    
+    def get_bayesian_summary(self, context_type: str = "modal_bin") -> Dict:
+        """Get summary of Bayesian statistics across all contexts"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Get summary stats for all contexts
+        cursor.execute('''
+            SELECT context_value,
+                   COUNT(*) as total_trades,
+                   SUM(win) as wins,
+                   AVG(return_pct) as avg_return,
+                   AVG(CASE WHEN trade_timestamp >= datetime('now', '-7 days') THEN win ELSE NULL END) as recent_win_rate
+            FROM context_performance 
+            WHERE context_type = ?
+            GROUP BY context_value
+            ORDER BY context_value
+        ''', (context_type,))
+        
+        results = cursor.fetchall()
+        conn.close()
+        
+        summary = {}
+        for row in results:
+            context_value, total_trades, wins, avg_return, recent_win_rate = row
+            losses = total_trades - wins
+            
+            # Calculate Bayesian parameters
+            alpha_post = config.alpha_prior + wins
+            beta_post = config.beta_prior + losses
+            expected_p = alpha_post / (alpha_post + beta_post)
+            
+            summary[context_value] = {
+                'total_trades': total_trades,
+                'wins': wins,
+                'losses': losses,
+                'win_rate': wins / total_trades if total_trades > 0 else 0,
+                'expected_p': expected_p,
+                'avg_return': avg_return or 0,
+                'recent_win_rate': recent_win_rate or 0,
+                'alpha_post': alpha_post,
+                'beta_post': beta_post
+            }
+        
+        return summary
+    
+    def print_bayesian_summary(self, context_type: str = "modal_bin"):
+        """Print a summary of Bayesian statistics for monitoring"""
+        summary = self.get_bayesian_summary(context_type)
+        
+        if not summary:
+            print("📊 No Bayesian data available yet")
+            return
+        
+        print("\n" + "="*60)
+        print("📊 V6 BAYESIAN LEARNING SUMMARY")
+        print("="*60)
+        print(f"{'Bin':<4} {'Trades':<7} {'Win%':<6} {'Expected P':<10} {'Avg Return':<12} {'Recent%':<8}")
+        print("-"*60)
+        
+        for context_value in sorted(summary.keys()):
+            stats = summary[context_value]
+            print(f"{context_value:<4} {stats['total_trades']:<7} "
+                  f"{stats['win_rate']*100:<5.1f}% {stats['expected_p']:<9.3f} "
+                  f"{stats['avg_return']*100:<11.2f}% {stats['recent_win_rate']*100:<7.1f}%")
+        
+        print("="*60)
 
 class RealTimeTradingSystem:
     """Main real-time trading system"""
     
     def __init__(self):
-        self.bayesian_manager = BayesianStatsManager()
+        # Load configuration
+        load_config_from_file()
+        
+        self.bayesian_manager = BayesianStatsManager(config.database_path)
+        self.databento_connector = DatabentoConnector(config.databento_api_key)
         self.current_data = pd.DataFrame()
         self.last_cluster_time = None
         self.active_recommendation = None
         self.contract_selector = None
+        self.is_market_open = False
+        self.current_contract = None
         
-        # V6 Strategy Parameters
-        self.VOLUME_THRESHOLD = 4.0
-        self.MIN_SIGNAL_STRENGTH = 0.45
-        self.RETENTION_MINUTES = 60
-        self.PROFIT_TARGET_RATIO = 2.0
+        # V6 Strategy Parameters (from config)
+        self.VOLUME_THRESHOLD = config.volume_threshold
+        self.MIN_SIGNAL_STRENGTH = config.min_signal_strength
+        self.RETENTION_MINUTES = config.retention_minutes
+        self.PROFIT_TARGET_RATIO = config.profit_target_ratio
+        
+        # Market hours (EST/EDT)
+        self.market_open_time = config.market_open_time
+        self.market_close_time = config.market_close_time
+        self.est_tz = pytz.timezone('US/Eastern')
         
         logger.info("V6 Real-Time Trading System initialized")
     
+    def is_market_hours(self) -> bool:
+        """Check if current time is within market hours (9:30 AM - 4:00 PM EST)"""
+        now_est = datetime.now(self.est_tz)
+        current_time = now_est.time()
+        
+        # Check if it's a weekday (Monday=0, Sunday=6)
+        if now_est.weekday() >= 5:  # Saturday or Sunday
+            return False
+            
+        # Check if within market hours
+        is_open = self.market_open_time <= current_time <= self.market_close_time
+        
+        if is_open != self.is_market_open:
+            self.is_market_open = is_open
+            status = "OPEN" if is_open else "CLOSED"
+            logger.info(f"🏪 Market is now {status} (EST: {now_est.strftime('%H:%M:%S')})")
+        
+        return is_open
+    
     async def connect_to_databento(self):
         """Connect to Databento API for real-time data"""
-        # TODO: Implement actual Databento connection
-        # This is a placeholder for the real implementation
         logger.info("Connecting to Databento API...")
         
-        # For now, simulate connection
-        await asyncio.sleep(1)
-        logger.info("✅ Connected to Databento API")
+        # Initialize the connector
+        initialized = await self.databento_connector.initialize()
+        if not initialized:
+            logger.error("❌ Failed to initialize Databento connector")
+            return False
         
+        # Set up data callback
+        self.databento_connector.set_data_callback(self.on_market_data_received)
+        
+        logger.info("✅ Connected to Databento API")
         return True
+    
+    def on_market_data_received(self, data: pd.DataFrame):
+        """Callback function for receiving real-time market data"""
+        try:
+            # Validate data
+            if data.empty or len(data) == 0:
+                logger.warning("⚠️  Received empty market data")
+                return
+            
+            # Append new data to current buffer
+            self.current_data = pd.concat([self.current_data, data]).tail(100)
+            
+            # Check for volume clusters only during market hours
+            if self.is_market_hours():
+                cluster = self.detect_volume_cluster(self.current_data)
+                
+                if cluster and (self.last_cluster_time is None or 
+                               (cluster.timestamp - self.last_cluster_time).total_seconds() > 
+                               config.cluster_detection_cooldown_minutes * 60):
+                    
+                    # Generate recommendation
+                    recommendation = self.generate_trading_recommendation(cluster)
+                    
+                    # Print recommendation
+                    self.print_recommendation(recommendation)
+                    
+                    # Save recommendation
+                    self.save_recommendation(recommendation, cluster)
+                    
+                    # Update last cluster time
+                    self.last_cluster_time = cluster.timestamp
+                    self.active_recommendation = recommendation
+                    
+        except Exception as e:
+            logger.error(f"❌ Error processing market data: {e}")
+            # Could implement retry logic here if needed
+    
+    async def reconnect_with_backoff(self, max_retries: int = 5):
+        """Reconnect to data feed with exponential backoff"""
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"🔄 Reconnection attempt {attempt + 1}/{max_retries}")
+                
+                # Wait with exponential backoff
+                wait_time = min(2 ** attempt, 60)  # Max 60 seconds
+                await asyncio.sleep(wait_time)
+                
+                # Try to reconnect
+                connected = await self.connect_to_databento()
+                if connected:
+                    logger.info("✅ Successfully reconnected to data feed")
+                    return True
+                    
+            except Exception as e:
+                logger.error(f"❌ Reconnection attempt {attempt + 1} failed: {e}")
+        
+        logger.error("❌ Failed to reconnect after all attempts")
+        return False
     
     def get_modal_bin_context(self, modal_position: float) -> int:
         """Calculate modal bin context (V6 method)"""
@@ -310,53 +552,62 @@ class RealTimeTradingSystem:
     def generate_trading_recommendation(self, cluster: VolumeCluster) -> TradingRecommendation:
         """Generate trading recommendation based on V6 Bayesian strategy"""
         
-        # Calculate modal bin context
+        # Calculate modal bin context (V6 method)
         modal_position = abs(cluster.entry_price - cluster.modal_price) / cluster.entry_price
         context_value = self.get_modal_bin_context(modal_position)
         
-        # Get Bayesian multiplier
-        bayesian_multiplier = self.bayesian_manager.calculate_bayesian_multiplier("modal_bin", context_value)
+        # Get Bayesian multiplier with diagnostics
+        bayesian_multiplier, diagnostics = self.bayesian_manager.calculate_bayesian_multiplier("modal_bin", context_value)
         
-        # Calculate position size (1-3 contracts based on Bayesian multiplier)
-        base_quantity = 1
-        quantity = max(1, min(3, int(base_quantity * bayesian_multiplier)))
+        # Calculate position size using V6 logic
+        base_quantity = config.base_position_size
+        quantity = max(1, min(config.max_position_size, int(base_quantity * bayesian_multiplier)))
         
-        # Calculate stop loss and profit target
-        volatility = 0.01  # Simplified - should use real volatility calculation
+        # Calculate volatility for risk management (simplified - should use real calculation)
+        volatility = 0.01  # 1% volatility per minute
+        
+        # Calculate stop loss and profit target (V6 method)
+        if config.use_profit_targets:
+            stop_distance = 1.0 * volatility * cluster.entry_price  # Tighter stops
+            min_stop = 0.005 * cluster.entry_price
+            stop_distance = max(stop_distance, min_stop)
+            profit_distance = stop_distance * config.profit_target_ratio
+        else:
+            stop_distance = 1.5 * volatility * cluster.entry_price
+            profit_distance = stop_distance * config.profit_target_ratio
         
         if cluster.direction == "long":
-            stop_loss = cluster.entry_price * (1 - 1.5 * volatility)
-            profit_target = cluster.entry_price * (1 + self.PROFIT_TARGET_RATIO * 1.5 * volatility)
+            stop_loss = cluster.entry_price - stop_distance
+            profit_target = cluster.entry_price + profit_distance
             action = "BUY"
         else:
-            stop_loss = cluster.entry_price * (1 + 1.5 * volatility)
-            profit_target = cluster.entry_price * (1 - self.PROFIT_TARGET_RATIO * 1.5 * volatility)
+            stop_loss = cluster.entry_price + stop_distance
+            profit_target = cluster.entry_price - profit_distance
             action = "SHORT"
         
         # Get Bayesian confidence
-        stats = self.bayesian_manager.get_context_stats("modal_bin", context_value)
-        confidence = stats['expected_p'] if stats else 0.5
+        confidence = diagnostics.get('expected_p', 0.5)
         
-        # Determine order type based on confidence (configurable)
-        if confidence > 0.80:  # High confidence - could use MARKET orders
-            order_type = "LIMIT"  # Still use LIMIT for now, configurable later
+        # Determine order type based on confidence and config
+        if config.use_market_orders_on_high_confidence and confidence > config.high_confidence_threshold:
+            order_type = "MARKET"
         else:
-            order_type = "LIMIT"
+            order_type = config.default_order_type
         
-        # Generate reasoning
-        reasoning = f"Volume cluster detected: {cluster.volume_ratio:.1f}x volume, " \
-                   f"signal strength {cluster.signal_strength:.3f}, " \
-                   f"Bayesian multiplier {bayesian_multiplier:.2f}x " \
-                   f"(confidence {confidence:.3f})"
+        # Generate detailed reasoning with V6 diagnostics
+        reasoning = f"V6 Bayesian: {cluster.volume_ratio:.1f}x volume, " \
+                   f"signal {cluster.signal_strength:.3f}, " \
+                   f"modal_bin[{context_value}] multiplier {bayesian_multiplier:.2f}x " \
+                   f"(p={confidence:.3f}, trades={diagnostics.get('total_trades', 0)})"
         
         return TradingRecommendation(
             timestamp=cluster.timestamp,
-            contract="ES JUN25",  # Will be dynamic based on contract selector
+            contract=self.current_contract or "ES JUN25",
             action=action,
             quantity=quantity,
             order_type=order_type,
             price=cluster.entry_price,
-            validity="DAY",
+            validity=config.default_validity,
             confidence=confidence,
             signal_strength=cluster.signal_strength,
             bayesian_multiplier=bayesian_multiplier,
@@ -413,50 +664,62 @@ class RealTimeTradingSystem:
             logger.error("Failed to connect to data feed")
             return
         
-        # Main trading loop
-        while True:
-            try:
-                # TODO: Replace with real Databento data ingestion
-                # For now, simulate receiving market data
-                await asyncio.sleep(60)  # Check every minute
+        # Select the current contract (for now, use the first available)
+        self.current_contract = config.available_contracts[0]
+        logger.info(f"📊 Trading contract: {self.current_contract}")
+        
+        # Start live data stream with error handling
+        stream_task = None
+        try:
+            logger.info("📡 Starting live data stream...")
+            stream_task = asyncio.create_task(
+                self.databento_connector.start_live_stream(self.current_contract)
+            )
+            await stream_task
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to start live stream: {e}")
+            
+            # Try to reconnect
+            reconnected = await self.reconnect_with_backoff()
+            if not reconnected:
+                logger.info("🔄 Falling back to simulation mode...")
                 
-                # Simulate market data (replace with real data)
-                current_time = datetime.now()
-                simulated_data = pd.DataFrame({
-                    'timestamp': [current_time],
-                    'open': [6010.0],
-                    'high': [6012.0],
-                    'low': [6008.0],
-                    'close': [6011.0],
-                    'volume': [15000]  # Simulate high volume for testing
-                })
-                simulated_data.set_index('timestamp', inplace=True)
-                
-                # Append to current data buffer
-                self.current_data = pd.concat([self.current_data, simulated_data]).tail(100)
-                
-                # Check for volume clusters
-                cluster = self.detect_volume_cluster(self.current_data)
-                
-                if cluster and (self.last_cluster_time is None or 
-                               (cluster.timestamp - self.last_cluster_time).total_seconds() > 1800):  # 30 min cooldown
-                    
-                    # Generate recommendation
-                    recommendation = self.generate_trading_recommendation(cluster)
-                    
-                    # Print recommendation
-                    self.print_recommendation(recommendation)
-                    
-                    # Save recommendation to file (with cluster info for feedback)
-                    self.save_recommendation(recommendation, cluster)
-                    
-                    # Update last cluster time
-                    self.last_cluster_time = cluster.timestamp
-                    self.active_recommendation = recommendation
-                
-            except Exception as e:
-                logger.error(f"Error in main loop: {e}")
-                await asyncio.sleep(10)  # Wait before retrying
+                # Fallback to simulation if live stream fails
+                while True:
+                    try:
+                        await asyncio.sleep(config.data_update_interval_seconds)
+                        
+                        # Check market hours
+                        if not self.is_market_hours():
+                            continue
+                        
+                        # Simulate market data for testing
+                        current_time = datetime.now()
+                        simulated_data = pd.DataFrame({
+                            'timestamp': [current_time],
+                            'open': [6010.0],
+                            'high': [6012.0],
+                            'low': [6008.0],
+                            'close': [6011.0],
+                            'volume': [15000]  # Simulate high volume for testing
+                        })
+                        simulated_data.set_index('timestamp', inplace=True)
+                        
+                        # Process the simulated data
+                        self.on_market_data_received(simulated_data)
+                        
+                    except Exception as e:
+                        logger.error(f"Error in simulation loop: {e}")
+                        await asyncio.sleep(10)  # Wait before retrying
+        finally:
+            # Clean up stream task
+            if stream_task and not stream_task.done():
+                stream_task.cancel()
+                try:
+                    await stream_task
+                except asyncio.CancelledError:
+                    pass
     
     def save_recommendation(self, rec: TradingRecommendation, cluster: VolumeCluster):
         """Save recommendation to JSON file for external systems"""
@@ -481,20 +744,48 @@ class RealTimeTradingSystem:
             'volume_rank': cluster.volume_rank
         }
         
+        # Ensure data directory exists
+        os.makedirs(os.path.dirname(config.latest_recommendation_path), exist_ok=True)
+        os.makedirs(os.path.dirname(config.recommendations_log_path), exist_ok=True)
+        
         # Save to latest recommendation file
-        with open('../data/latest_recommendation.json', 'w') as f:
+        with open(config.latest_recommendation_path, 'w') as f:
             json.dump(rec_dict, f, indent=2)
         
         # Append to recommendations log
-        with open('../data/recommendations_log.jsonl', 'a') as f:
+        with open(config.recommendations_log_path, 'a') as f:
             f.write(json.dumps(rec_dict) + '\n')
         
         logger.info(f"💾 Recommendation saved: {rec.action} {rec.quantity} {rec.contract} @ ${rec.price}")
 
 async def main():
     """Main entry point"""
+    # Validate configuration
+    errors = config.validate()
+    if errors:
+        print("❌ Configuration errors found:")
+        for error in errors:
+            print(f"   {error}")
+        print("\n💡 Please fix configuration issues before running the system")
+        return
+    
+    # Print configuration summary
+    config.print_config()
+    
+    # Initialize and run the trading system
     system = RealTimeTradingSystem()
-    await system.run_real_time_strategy()
+    
+    try:
+        await system.run_real_time_strategy()
+    except KeyboardInterrupt:
+        logger.info("⏹️  System stopped by user")
+    except Exception as e:
+        logger.error(f"❌ System error: {e}")
+        raise
+    finally:
+        # Clean up connections
+        if system.databento_connector:
+            await system.databento_connector.stop_stream()
 
 if __name__ == "__main__":
     print("🚀 V6 BAYESIAN REAL-TIME TRADING SYSTEM")
@@ -506,4 +797,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n⏹️  System stopped by user")
     except Exception as e:
-        print(f"❌ System error: {e}") 
+        print(f"❌ System error: {e}")
+        logger.error(f"Fatal system error: {e}") 

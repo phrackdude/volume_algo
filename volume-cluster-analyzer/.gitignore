@@ -9,6 +9,7 @@ __pycache__/
 *.env
 trading_config.env
 config.env
+email_config.json
 
 # API keys and secrets
 *api_key*
@@ -55,4 +56,7 @@ ENV/
 *.csv
 data/*.db
 data/*.log
+
+# Project roadmap with sensitive keys
+PROJECT_ROADMAP.md
 
