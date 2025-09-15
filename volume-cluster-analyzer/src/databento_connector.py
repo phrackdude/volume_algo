@@ -135,6 +135,10 @@ class DatabentoConnector:
             
             # Process live data
             async for record in self.live_client:
+                # Skip system messages and other non-data records
+                if not hasattr(record, 'schema'):
+                    continue
+                    
                 if record.schema == "ohlcv-1m":
                     # Convert to DataFrame format
                     data_row = pd.DataFrame({
