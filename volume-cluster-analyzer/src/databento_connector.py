@@ -135,6 +135,31 @@ class DatabentoConnector:
             # Add callback to process data
             def process_record(record):
                 logger.info(f"🔔 CALLBACK TRIGGERED: {type(record).__name__}")
+                
+                # Check for OHLCV records (they don't have schema attribute)
+                if hasattr(record, 'close') and hasattr(record, 'volume'):
+                    logger.info(f"📊 Processing OHLCV record: {type(record).__name__}")
+                    logger.info(f"📈 OHLCV data: Close={record.close / 1e9:.2f}, Volume={record.volume}")
+                    
+                    # Convert to DataFrame format
+                    data_row = pd.DataFrame({
+                        'timestamp': [pd.to_datetime(record.ts_event, unit='ns')],
+                        'open': [record.open / 1e9],  # Databento price scaling
+                        'high': [record.high / 1e9],
+                        'low': [record.low / 1e9],
+                        'close': [record.close / 1e9],
+                        'volume': [record.volume]
+                    })
+                    data_row.set_index('timestamp', inplace=True)
+                    
+                    # Send to callback
+                    if self.data_callback:
+                        logger.info(f"📤 Sending OHLCV data to callback: {data_row.iloc[0]['close']:.2f}")
+                        self.data_callback(data_row)
+                    else:
+                        logger.warning("⚠️ No data callback set")
+                    return
+                
                 # Skip system messages and other non-data records
                 if not hasattr(record, 'schema'):
                     logger.info(f"🔔 Skipping record without schema: {type(record).__name__}")
