@@ -28,7 +28,7 @@ class TradingMonitor:
     def __init__(self, db_path: str = "../data/paper_trades.db", bayesian_db_path: str = "../data/bayesian_stats.db"):
         self.db_path = db_path
         self.bayesian_db_path = bayesian_db_path
-        self.app = Flask(__name__)
+        self.app = Flask(__name__, template_folder='/opt/v6-trading-system/templates')
         self.setup_routes()
         
         # Performance cache
