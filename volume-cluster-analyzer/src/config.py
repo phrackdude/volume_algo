@@ -116,10 +116,10 @@ class TradingSystemConfig:
         
         if self.contract_mapping is None:
             self.contract_mapping = {
-                'ES JUN25': 'ESM5',
-                'ES SEP25': 'ESU5', 
-                'ES DEC25': 'ESZ5',
-                'ES MAR26': 'ESH6'
+                'ES JUN25': 'ESM6',  # ES Jun 2026
+                'ES SEP25': 'ESU5',  # ES Sep 2025 (current front month)
+                'ES DEC25': 'ESZ5',  # ES Dec 2025
+                'ES MAR26': 'ESH6'   # ES Mar 2026
             }
     
     def validate(self) -> List[str]:

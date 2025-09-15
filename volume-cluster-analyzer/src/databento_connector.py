@@ -80,7 +80,7 @@ class DatabentoConnector:
         
         try:
             # Map contract to Databento symbol
-            symbol = self.contract_mapping.get(contract, 'ES.FUT')
+            symbol = self.contract_mapping.get(contract, 'ESZ5')
             
             if end_date is None:
                 end_date = datetime.now()
@@ -276,7 +276,7 @@ class DatabentoConnector:
         """Get contract specifications"""
         return {
             'contract': contract,
-            'symbol': self.contract_mapping.get(contract, 'ES.FUT'),
+            'symbol': self.contract_mapping.get(contract, 'ESZ5'),
             'tick_size': 0.25,
             'tick_value': 12.50,
             'contract_size': 50,  # $50 per point

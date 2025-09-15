@@ -75,7 +75,7 @@ class DatabentoConnectionTest:
             # Request ES futures data (1-minute bars)
             data = self.historical_client.timeseries.get_range(
                 dataset="GLBX.MDP3",
-                symbols=["ES.FUT"],
+                symbols=["ESZ5"],
                 schema="ohlcv-1m",
                 start=start_date,
                 end=end_date
