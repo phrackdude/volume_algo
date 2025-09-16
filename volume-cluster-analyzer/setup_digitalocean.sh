@@ -27,8 +27,9 @@ cd /opt/v6-trading-system
 # Clone repository (replace with your actual repository URL)
 echo "📥 Cloning repository..."
 if [ ! -d ".git" ]; then
-    # Replace with your actual GitHub repository URL
-    sudo git clone https://github.com/YOUR_USERNAME/YOUR_REPO.git .
+    # Clone the V6 Bayesian Trading System repository
+    sudo git clone https://github.com/phrackdude/volume_algo.git .
+    cd volume-cluster-analyzer
 else
     echo "Repository already exists, updating..."
     sudo git pull origin main
@@ -37,11 +38,12 @@ fi
 # Set permissions
 echo "🔐 Setting permissions..."
 sudo chown -R root:root /opt/v6-trading-system
-sudo chmod +x /opt/v6-trading-system/*.py
-sudo chmod +x /opt/v6-trading-system/src/*.py
+sudo chmod +x /opt/v6-trading-system/volume-cluster-analyzer/*.py
+sudo chmod +x /opt/v6-trading-system/volume-cluster-analyzer/src/*.py
 
 # Create virtual environment
 echo "🐍 Creating Python virtual environment..."
+cd volume-cluster-analyzer
 if [ ! -d "venv" ]; then
     sudo python3.11 -m venv venv
     sudo venv/bin/pip install --upgrade pip
@@ -68,9 +70,9 @@ Wants=network.target
 Type=simple
 User=root
 Group=root
-WorkingDirectory=/opt/v6-trading-system
-Environment=PATH=/opt/v6-trading-system/venv/bin
-ExecStart=/opt/v6-trading-system/venv/bin/python /opt/v6-trading-system/launch_phase4_system.py
+WorkingDirectory=/opt/v6-trading-system/volume-cluster-analyzer
+Environment=PATH=/opt/v6-trading-system/volume-cluster-analyzer/venv/bin
+ExecStart=/opt/v6-trading-system/volume-cluster-analyzer/venv/bin/python /opt/v6-trading-system/volume-cluster-analyzer/launch_phase4_system.py
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -82,7 +84,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/v6-trading-system/data
+ReadWritePaths=/opt/v6-trading-system/volume-cluster-analyzer/data
 
 # Resource limits
 LimitNOFILE=65536
@@ -105,9 +107,9 @@ Wants=network.target
 Type=simple
 User=root
 Group=root
-WorkingDirectory=/opt/v6-trading-system
-Environment=PATH=/opt/v6-trading-system/venv/bin
-ExecStart=/opt/v6-trading-system/venv/bin/python /opt/v6-trading-system/src/scheduled_email_reporter.py
+WorkingDirectory=/opt/v6-trading-system/volume-cluster-analyzer
+Environment=PATH=/opt/v6-trading-system/volume-cluster-analyzer/venv/bin
+ExecStart=/opt/v6-trading-system/volume-cluster-analyzer/venv/bin/python /opt/v6-trading-system/volume-cluster-analyzer/src/scheduled_email_reporter.py
 Restart=always
 RestartSec=30
 StandardOutput=journal
@@ -119,7 +121,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/v6-trading-system/data
+ReadWritePaths=/opt/v6-trading-system/volume-cluster-analyzer/data
 
 [Install]
 WantedBy=multi-user.target
@@ -137,9 +139,9 @@ Wants=network.target
 Type=simple
 User=root
 Group=root
-WorkingDirectory=/opt/v6-trading-system
-Environment=PATH=/opt/v6-trading-system/venv/bin
-ExecStart=/opt/v6-trading-system/venv/bin/python /opt/v6-trading-system/src/monitoring_dashboard.py --host 0.0.0.0 --port 5000
+WorkingDirectory=/opt/v6-trading-system/volume-cluster-analyzer
+Environment=PATH=/opt/v6-trading-system/volume-cluster-analyzer/venv/bin
+ExecStart=/opt/v6-trading-system/volume-cluster-analyzer/venv/bin/python /opt/v6-trading-system/volume-cluster-analyzer/src/monitoring_dashboard.py --host 0.0.0.0 --port 5000
 Restart=always
 RestartSec=10
 StandardOutput=journal
@@ -151,7 +153,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/v6-trading-system/data
+ReadWritePaths=/opt/v6-trading-system/volume-cluster-analyzer/data
 
 [Install]
 WantedBy=multi-user.target
