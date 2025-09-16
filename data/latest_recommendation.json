@@ -1,0 +1,12 @@
+{
+  "timestamp": "2025-09-15T17:37:22.113096",
+  "contract": "ES JUN25",
+  "action": "BUY",
+  "quantity": 2,
+  "price": 5425.5,
+  "volume_ratio": 4.2,
+  "signal_strength": 0.456,
+  "confidence": 0.623,
+  "bayesian_multiplier": 1.8,
+  "reasoning": "V6 Bayesian: 4.2x volume, signal 0.456, modal_bin[3] multiplier 1.8x (p=0.623, trades=12)"
+}

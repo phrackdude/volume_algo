@@ -150,8 +150,9 @@ class RealisticExecutionSimulator:
 class AutomatedPaperTrader:
     """Fully automated paper trading system with $100,000 portfolio"""
     
-    def __init__(self, starting_balance: float = 100000.0):
-        self.trading_system = RealTimeTradingSystem()
+    def __init__(self, starting_balance: float = 100000.0, trading_system: RealTimeTradingSystem = None):
+        # Use provided trading system or create new one
+        self.trading_system = trading_system or RealTimeTradingSystem()
         self.executor = RealisticExecutionSimulator()
         self.open_trades: List[PaperTrade] = []
         self.closed_trades: List[PaperTrade] = []
@@ -321,12 +322,11 @@ class AutomatedPaperTrader:
         # Calculate max contracts based on risk
         max_contracts = int(risk_amount / dollars_per_contract)
         
-        # Apply V6 Bayesian multiplier with proper scaling
-        base_quantity = recommendation.quantity
-        bayesian_quantity = int(base_quantity * recommendation.bayesian_multiplier)
+        # The recommendation already contains signal + Bayesian scaling, just apply portfolio risk limits
+        recommended_quantity = recommendation.quantity
         
         # Cap at risk-based maximum
-        contracts = max(1, min(max_contracts, bayesian_quantity))
+        contracts = max(1, min(max_contracts, recommended_quantity))
         
         # Additional safety: don't risk more than 5% of portfolio on a single trade
         max_risk_amount = self.current_balance * 0.05
@@ -337,7 +337,7 @@ class AutomatedPaperTrader:
         contracts = min(contracts, 5)  # Cap at 5 contracts max
         
         logger.info(f"📊 Position sizing: Risk={risk_pct:.1%} (${risk_amount:.0f}), "
-                   f"Bayesian={recommendation.bayesian_multiplier:.2f}x, "
+                   f"Recommended={recommended_quantity} (signal+Bayesian scaled), "
                    f"Final size={contracts} contracts")
         
         return max(1, contracts)
@@ -427,53 +427,216 @@ class AutomatedPaperTrader:
         conn.commit()
         conn.close()
     
-    def simulate_exit_conditions(self, trade: PaperTrade, current_price: float) -> Optional[tuple]:
-        """Enhanced V6 risk management with dynamic stop losses and profit targets"""
-        
-        # Calculate dynamic risk parameters based on V6 strategy
-        volatility = 0.01  # Simplified volatility estimate
-        base_stop_distance = 0.015  # 1.5% base stop
-        base_profit_distance = 0.03  # 3% base profit target (2:1 ratio)
-        
-        # Adjust based on signal strength and confidence
-        signal_adjustment = 1.0 + (trade.signal_strength - 0.5) * 0.5  # 0.75x to 1.25x
-        confidence_adjustment = 1.0 + (trade.confidence - 0.5) * 0.5   # 0.75x to 1.25x
-        
-        # Apply adjustments
-        stop_distance = base_stop_distance * signal_adjustment * confidence_adjustment
-        profit_distance = base_profit_distance * signal_adjustment * confidence_adjustment
-        
-        # Ensure minimum and maximum bounds
-        stop_distance = max(0.005, min(stop_distance, 0.025))  # 0.5% to 2.5%
-        profit_distance = max(0.01, min(profit_distance, 0.05))  # 1% to 5%
-        
-        if trade.action in ["BUY", "LONG"]:
-            # Long position
-            profit_target = trade.execution_price * (1 + profit_distance)
-            stop_loss = trade.execution_price * (1 - stop_distance)
+    def calculate_robust_volatility(self, entry_time: datetime, entry_price: float) -> float:
+        """
+        Production-ready volatility calculation with multiple fallbacks and cost optimization
+        Uses shorter lookback periods and robust estimation methods
+        """
+        try:
+            if self.trading_system.current_data.empty:
+                return self._get_fallback_volatility(entry_price)
             
-            if current_price >= profit_target:
-                return current_price, "PROFIT_TARGET"
-            elif current_price <= stop_loss:
-                return current_price, "STOP_LOSS"
+            # COST OPTIMIZATION: Use much shorter lookbacks for live trading
+            # Try progressively shorter periods if data is insufficient
+            lookback_options = [
+                480,   # 8 hours (1 trading day) - PREFERRED for live trading
+                240,   # 4 hours (half day) 
+                120,   # 2 hours (minimum for reasonable estimate)
+                60     # 1 hour (emergency fallback)
+            ]
+            
+            for lookback_minutes in lookback_options:
+                historical_data = self.trading_system.current_data[
+                    self.trading_system.current_data.index <= entry_time
+                ].tail(lookback_minutes)
                 
-        else:  # SHORT position
-            profit_target = trade.execution_price * (1 - profit_distance)
-            stop_loss = trade.execution_price * (1 + stop_distance)
+                if len(historical_data) >= 60:  # Minimum 60 bars for reasonable estimate
+                    # Calculate multiple volatility measures for robustness
+                    close_prices = historical_data['close']
+                    
+                    # Method 1: Close-to-close volatility (standard)
+                    returns = close_prices.pct_change().dropna()
+                    close_vol = returns.std() if len(returns) > 10 else None
+                    
+                    # Method 2: Garman-Klass volatility (uses OHLC - more accurate)
+                    if all(col in historical_data.columns for col in ['high', 'low', 'open']):
+                        gk_vol = self._calculate_garman_klass_volatility(historical_data)
+                    else:
+                        gk_vol = None
+                    
+                    # Method 3: ATR-based volatility (robust to gaps)
+                    atr_vol = self._calculate_atr_volatility(historical_data, entry_price)
+                    
+                    # Choose best available method
+                    volatility = self._select_best_volatility(close_vol, gk_vol, atr_vol, lookback_minutes)
+                    
+                    if volatility and 0.001 <= volatility <= 0.05:  # Sanity check: 0.1% to 5%
+                        logger.info(f"📊 Volatility: {volatility:.4f} ({volatility*100:.2f}%) from {len(historical_data)} bars ({lookback_minutes/60:.1f}h)")
+                        return volatility
+                    
+            logger.warning("⚠️  All volatility calculations failed - using fallback")
             
-            if current_price <= profit_target:
-                return current_price, "PROFIT_TARGET"
-            elif current_price >= stop_loss:
-                return current_price, "STOP_LOSS"
+        except Exception as e:
+            logger.error(f"❌ Error calculating volatility: {e}")
         
-        # Time-based exit (hold for max 6 hours for V6 strategy)
-        max_hold_time = 21600  # 6 hours
-        if (datetime.now() - trade.execution_time).total_seconds() > max_hold_time:
-            return current_price, "TIME_EXIT"
+        return self._get_fallback_volatility(entry_price)
+    
+    def _calculate_garman_klass_volatility(self, data: pd.DataFrame) -> Optional[float]:
+        """Garman-Klass volatility estimator - more efficient than close-to-close"""
+        try:
+            if len(data) < 10:
+                return None
+                
+            # Garman-Klass formula: 0.5 * log(H/L)^2 - (2*log(2)-1) * log(C/O)^2
+            log_hl = np.log(data['high'] / data['low'])
+            log_co = np.log(data['close'] / data['open'])
+            
+            gk_values = 0.5 * (log_hl ** 2) - (2 * np.log(2) - 1) * (log_co ** 2)
+            return np.sqrt(gk_values.mean()) if len(gk_values) > 0 else None
+            
+        except Exception as e:
+            logger.debug(f"GK volatility calculation failed: {e}")
+            return None
+    
+    def _calculate_atr_volatility(self, data: pd.DataFrame, entry_price: float) -> Optional[float]:
+        """ATR-based volatility - robust to price gaps and missing data"""
+        try:
+            if len(data) < 14:  # Need minimum data for ATR
+                return None
+                
+            # Calculate True Range
+            high_low = data['high'] - data['low']
+            high_close_prev = np.abs(data['high'] - data['close'].shift(1))
+            low_close_prev = np.abs(data['low'] - data['close'].shift(1))
+            
+            true_range = np.maximum(high_low, np.maximum(high_close_prev, low_close_prev))
+            atr = true_range.rolling(window=14).mean().iloc[-1]  # 14-period ATR
+            
+            # Convert ATR to volatility (percentage of entry price)
+            atr_volatility = atr / entry_price if entry_price > 0 else None
+            return atr_volatility
+            
+        except Exception as e:
+            logger.debug(f"ATR volatility calculation failed: {e}")
+            return None
+    
+    def _select_best_volatility(self, close_vol: Optional[float], gk_vol: Optional[float], 
+                               atr_vol: Optional[float], lookback_minutes: int) -> Optional[float]:
+        """Select the most reliable volatility measure"""
+        
+        # Preference order: Garman-Klass > Close-to-close > ATR
+        candidates = []
+        
+        if gk_vol and 0.001 <= gk_vol <= 0.05:
+            candidates.append(('garman_klass', gk_vol, 1.0))  # Highest weight
+            
+        if close_vol and 0.001 <= close_vol <= 0.05:
+            candidates.append(('close_to_close', close_vol, 0.8))
+            
+        if atr_vol and 0.001 <= atr_vol <= 0.05:
+            candidates.append(('atr', atr_vol, 0.6))  # Lowest weight but most robust
+        
+        if not candidates:
+            return None
+            
+        # For short lookbacks, prefer more robust methods
+        if lookback_minutes <= 120:  # Less than 2 hours
+            # Weight ATR higher for short periods
+            for i, (method, vol, weight) in enumerate(candidates):
+                if method == 'atr':
+                    candidates[i] = (method, vol, weight * 1.5)
+        
+        # Return highest weighted method
+        best_method, best_vol, _ = max(candidates, key=lambda x: x[2])
+        logger.debug(f"Selected {best_method} volatility: {best_vol:.4f}")
+        
+        return best_vol
+    
+    def _get_fallback_volatility(self, entry_price: float) -> float:
+        """Intelligent fallback volatility based on ES futures characteristics"""
+        
+        # ES futures typical volatility ranges (based on price level)
+        if entry_price >= 6000:      # High price levels
+            return 0.008  # 0.8% (more volatile at high prices)
+        elif entry_price >= 4000:    # Medium price levels  
+            return 0.006  # 0.6%
+        else:                        # Lower price levels
+            return 0.004  # 0.4%
+    
+    def calculate_profit_target_and_stop(self, entry_price: float, direction: str, volatility: float) -> tuple:
+        """Calculate profit target and stop loss matching your V6 specification"""
+        # V6 Parameters
+        TIGHTER_STOPS = True  # Use 1.0x volatility instead of 1.5x
+        PROFIT_TARGET_RATIO = 2.0  # 2:1 risk/reward
+        
+        # Stop distance calculation
+        if TIGHTER_STOPS:
+            stop_distance = 1.0 * volatility * entry_price
+        else:
+            stop_distance = 1.5 * volatility * entry_price
+        
+        # Minimum stop distance (0.5% of entry price)
+        min_stop = 0.005 * entry_price
+        stop_distance = max(stop_distance, min_stop)
+        
+        # Profit target based on risk/reward ratio
+        profit_distance = stop_distance * PROFIT_TARGET_RATIO
+        
+        if direction == "long":
+            stop_price = entry_price - stop_distance
+            profit_target = entry_price + profit_distance
+        else:  # short
+            stop_price = entry_price + stop_distance
+            profit_target = entry_price - profit_distance
+        
+        return profit_target, stop_price, stop_distance
+    
+    def check_exit_conditions_with_highs_lows(self, trade: PaperTrade, current_bar: dict) -> Optional[tuple]:
+        """
+        Check exit conditions using bar high/low data as per your specification
+        Returns (exit_price, exit_reason) or None
+        """
+        # Calculate stops and targets if not already done
+        if not hasattr(trade, 'profit_target'):
+            volatility = self.calculate_robust_volatility(trade.execution_time, trade.execution_price)
+            direction = "long" if trade.action in ["BUY", "LONG"] else "short"
+            
+            profit_target, stop_price, stop_distance = self.calculate_profit_target_and_stop(
+                trade.execution_price, direction, volatility
+            )
+            
+            # Store in trade object for future reference
+            trade.profit_target = profit_target
+            trade.stop_price = stop_price
+            trade.stop_distance = stop_distance
+            
+            logger.info(f"📊 Trade {trade.trade_id} stops set:")
+            logger.info(f"   Entry: ${trade.execution_price:.2f}")
+            logger.info(f"   Stop: ${stop_price:.2f} (${stop_distance:.2f} distance)")
+            logger.info(f"   Target: ${profit_target:.2f} (2:1 R/R)")
+        
+        # Check time-based exit first (60 minutes maximum)
+        time_elapsed = (datetime.now() - trade.execution_time).total_seconds() / 60  # minutes
+        if time_elapsed > 60:
+            return current_bar['close'], "time"
+        
+        # Check stops and targets using high/low data (hard levels)
+        if trade.action in ["BUY", "LONG"]:
+            # Long position: check profit target first, then stop
+            if current_bar['high'] >= trade.profit_target:
+                return trade.profit_target, "profit_target"
+            elif current_bar['low'] <= trade.stop_price:
+                return trade.stop_price, "stop_loss"
+        else:  # SHORT position
+            # Short position: check profit target first, then stop  
+            if current_bar['low'] <= trade.profit_target:
+                return trade.profit_target, "profit_target"
+            elif current_bar['high'] >= trade.stop_price:
+                return trade.stop_price, "stop_loss"
         
         # Portfolio protection: emergency stop if portfolio drawdown exceeds 5%
         if self.max_drawdown_pct > 5.0:
-            return current_price, "EMERGENCY_STOP"
+            return current_bar['close'], "emergency_stop"
             
         return None
     
@@ -520,20 +683,14 @@ class AutomatedPaperTrader:
         else:  # SHORT
             gross_pnl = (trade.execution_price - exit_price) * trade.quantity * 50
         
-        # Calculate V6 transaction costs
-        # Entry costs: commission + slippage
-        entry_commission = self.commission_per_contract * trade.quantity
-        entry_slippage_cost = abs(trade.slippage) * self.tick_value * trade.quantity
+        # Calculate V6 transaction costs (matching your specification: $11.875 per contract per trade)
+        # Your spec: Commission $2.50 + Slippage 0.75 ticks * $12.50 = $11.875 per contract per trade
+        cost_per_contract = self.commission_per_contract + (self.slippage_ticks * self.tick_value)  # $2.50 + $9.375 = $11.875
+        total_transaction_costs = cost_per_contract * trade.quantity
         
-        # Exit costs: commission + slippage (simulate exit slippage)
-        exit_commission = self.commission_per_contract * trade.quantity
-        exit_slippage = self.slippage_ticks * 0.25  # 0.75 ticks * $0.25 per tick
-        exit_slippage_cost = exit_slippage * self.tick_value * trade.quantity
-        
-        # Total transaction costs
-        total_commission = entry_commission + exit_commission
-        total_slippage_cost = entry_slippage_cost + exit_slippage_cost
-        total_transaction_costs = total_commission + total_slippage_cost
+        # Break down for tracking
+        total_commission = self.commission_per_contract * trade.quantity
+        total_slippage_cost = (self.slippage_ticks * self.tick_value) * trade.quantity
         
         # Net P&L after transaction costs
         trade.pnl = gross_pnl - total_transaction_costs
@@ -726,12 +883,20 @@ class AutomatedPaperTrader:
                     
                     self.trading_system.last_cluster_time = cluster.timestamp
                 
-                # Check exit conditions for open trades
-                for trade in self.open_trades[:]:  # Copy list to avoid modification during iteration
-                    exit_result = self.simulate_exit_conditions(trade, current_price)
-                    if exit_result:
-                        exit_price, exit_reason = exit_result
-                        await self.close_trade(trade, exit_price, exit_reason)
+                # Check exit conditions for open trades using proper high/low monitoring
+                if not latest_data.empty:
+                    current_bar = {
+                        'high': latest_data['high'].iloc[-1],
+                        'low': latest_data['low'].iloc[-1], 
+                        'close': latest_data['close'].iloc[-1],
+                        'timestamp': latest_data.index[-1]
+                    }
+                    
+                    for trade in self.open_trades[:]:  # Copy list to avoid modification during iteration
+                        exit_result = self.check_exit_conditions_with_highs_lows(trade, current_bar)
+                        if exit_result:
+                            exit_price, exit_reason = exit_result
+                            await self.close_trade(trade, exit_price, exit_reason)
                 
                 # Print performance summary every 5 trades
                 if self.total_trades > 0 and self.total_trades % 5 == 0:

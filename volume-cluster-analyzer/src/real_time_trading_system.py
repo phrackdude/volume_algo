@@ -90,6 +90,31 @@ def test_audio_alerts():
     print("✅ Audio test complete!")
     print("If you didn't hear sounds, check AUDIO_ENABLED setting or system audio.")
 
+def calculate_transaction_costs(position_size: float = 1.0) -> float:
+    """
+    Calculate total transaction costs as return fraction matching V6 specification
+    
+    Args:
+        position_size: Number of contracts
+        
+    Returns:
+        Transaction cost as fraction of notional (e.g., 0.002375 = 0.2375%)
+    """
+    # V6 Transaction cost parameters
+    COMMISSION_PER_CONTRACT = 2.50  # $2.50 per contract
+    SLIPPAGE_TICKS = 0.75           # 0.75 ticks slippage  
+    TICK_VALUE = 12.50              # $12.50 per tick for ES
+    NOTIONAL_PROXY = 5000           # Fixed notional proxy per your specification
+    
+    # Calculate costs
+    commission_cost = COMMISSION_PER_CONTRACT * position_size
+    slippage_cost = SLIPPAGE_TICKS * TICK_VALUE * position_size
+    total_cost_dollars = commission_cost + slippage_cost  # $11.875 per contract
+    
+    # Return as fraction: $11.875 / $5000 = 0.002375 (0.2375%)
+    # Note: position_size cancels out, so cost percentage is invariant to position size
+    return total_cost_dollars / (NOTIONAL_PROXY * position_size)
+
 @dataclass
 class TradingRecommendation:
     """Trading recommendation output structure matching your order interface"""
@@ -105,6 +130,7 @@ class TradingRecommendation:
     bayesian_multiplier: float
     stop_loss: float
     profit_target: float
+    transaction_cost_pct: float  # Transaction cost as percentage of notional
     reasoning: str  # Human-readable explanation
 
 @dataclass
@@ -113,6 +139,7 @@ class VolumeCluster:
     timestamp: datetime
     volume_ratio: float
     modal_price: float
+    modal_position: float  # Normalized position (0-1) within cluster range
     signal_strength: float
     direction: str
     entry_price: float
@@ -402,17 +429,36 @@ class RealTimeTradingSystem:
         self.current_contract = None
         
         # V6 Strategy Parameters (from config)
-        self.VOLUME_THRESHOLD = config.volume_threshold
-        self.MIN_SIGNAL_STRENGTH = config.min_signal_strength
+        self.VOLUME_THRESHOLD = config.volume_threshold  # 4.0
+        self.MIN_SIGNAL_STRENGTH = config.min_signal_strength  # 0.45
         self.RETENTION_MINUTES = config.retention_minutes
         self.PROFIT_TARGET_RATIO = config.profit_target_ratio
+        
+        # V6 Trading Philosophy Parameters
+        self.TIGHT_LONG_THRESHOLD = 0.15  # Modal position ≤ 0.15 for longs
+        self.ELIMINATE_SHORTS = True      # Shorts disabled based on performance
+        self.SHORT_MIN_SIGNAL_STRENGTH = 0.65  # Higher threshold for shorts if enabled
+        self.TOP_N_CLUSTERS_PER_DAY = 1   # Only trade top volume cluster
+        self.ROLLING_VOLUME_WINDOW_HOURS = 2.0  # Rolling window for volume ranking
+        self.MIN_CLUSTERS_FOR_RANKING = 2  # Minimum clusters needed for ranking
+        
+        # Retest requirement parameters
+        self.RETEST_TOLERANCE = 0.75      # ±0.75 points (≈ 3 ES ticks) for retest
+        self.RETEST_TIMEOUT_MINUTES = 30  # Maximum time to wait for retest
+        
+        # Historical cluster tracking for rolling volume ranking
+        self.processed_clusters = []  # Track past clusters for ranking
+        self.daily_clusters = []      # Reset each day
+        
+        # Pending retest tracking
+        self.pending_retests = []     # Track clusters waiting for retest
         
         # Market hours (EST/EDT)
         self.market_open_time = config.market_open_time
         self.market_close_time = config.market_close_time
         self.est_tz = pytz.timezone('US/Eastern')
         
-        logger.info("V6 Real-Time Trading System initialized")
+        logger.info("V6 Real-Time Trading System initialized with proper trading philosophy")
     
     def is_market_hours(self) -> bool:
         """Check if current time is within market hours (9:30 AM - 4:00 PM EST)"""
@@ -430,6 +476,11 @@ class RealTimeTradingSystem:
             self.is_market_open = is_open
             status = "OPEN" if is_open else "CLOSED"
             logger.info(f"🏪 Market is now {status} (EST: {now_est.strftime('%H:%M:%S')})")
+            
+            # Clean up pending retests when market closes
+            if not is_open and self.pending_retests:
+                logger.info(f"🧹 Market closed - clearing {len(self.pending_retests)} pending retests")
+                self.pending_retests.clear()
         
         return is_open
     
@@ -468,33 +519,56 @@ class RealTimeTradingSystem:
                 logger.warning("⚠️  Received empty market data")
                 return
             
-            # Append new data to current buffer
-            self.current_data = pd.concat([self.current_data, data]).tail(100)
+            # Append new data to current buffer (keep more data for proper analysis)
+            self.current_data = pd.concat([self.current_data, data]).tail(500)  # Keep 8+ hours of minute data
             
             # Always save current market data for ticker display
-            logger.info(f"💾 Calling save_current_market_data with {len(data)} rows")
             self.save_current_market_data(data)
             
-            # Check for volume clusters only during market hours
+            # Check for volume clusters and retests only during market hours
             if self.is_market_hours():
-                cluster = self.detect_volume_cluster(self.current_data)
+                # First, check for pending retests
+                retest_cluster = self.check_for_retests(self.current_data)
                 
-                if cluster and (self.last_cluster_time is None or 
-                               (cluster.timestamp - self.last_cluster_time).total_seconds() > 
-                               config.cluster_detection_cooldown_minutes * 60):
+                if retest_cluster:
+                    logger.info("🎯 RETEST CONFIRMED - Generating trading recommendation")
                     
-                    # Generate recommendation
-                    recommendation = self.generate_trading_recommendation(cluster)
+                    # Generate recommendation for retested cluster
+                    recommendation = self.generate_trading_recommendation(retest_cluster)
                     
                     # Print recommendation
                     self.print_recommendation(recommendation)
                     
                     # Save recommendation
-                    self.save_recommendation(recommendation, cluster)
+                    self.save_recommendation(recommendation, retest_cluster)
                     
                     # Update last cluster time
-                    self.last_cluster_time = cluster.timestamp
+                    self.last_cluster_time = retest_cluster.timestamp
                     self.active_recommendation = recommendation
+                
+                # Then, look for new volume clusters (with cooldown)
+                elif (self.last_cluster_time is None or 
+                      (self.current_data.index[-1] - self.last_cluster_time).total_seconds() > 
+                      config.cluster_detection_cooldown_minutes * 60):
+                    
+                    cluster = self.detect_volume_cluster(self.current_data)
+                    
+                    # Note: cluster will be None if waiting for retest, or a cluster if immediate retest
+                    if cluster:
+                        logger.info("🎯 IMMEDIATE RETEST - Generating trading recommendation")
+                        
+                        # Generate recommendation
+                        recommendation = self.generate_trading_recommendation(cluster)
+                        
+                        # Print recommendation
+                        self.print_recommendation(recommendation)
+                        
+                        # Save recommendation
+                        self.save_recommendation(recommendation, cluster)
+                        
+                        # Update last cluster time
+                        self.last_cluster_time = cluster.timestamp
+                        self.active_recommendation = recommendation
                     
         except Exception as e:
             logger.error(f"❌ Error processing market data: {e}")
@@ -526,57 +600,380 @@ class RealTimeTradingSystem:
         """Calculate modal bin context (V6 method)"""
         return min(int(modal_position * 10), 9)
     
+    def get_rolling_volume_rank(self, cluster_time: datetime, cluster_volume_ratio: float) -> int:
+        """
+        BIAS-FREE VOLUME RANKING: Only uses clusters that occurred BEFORE current cluster
+        Returns the rank of current cluster among recent clusters (1 = highest volume)
+        """
+        # Define rolling window - only look at clusters from past N hours
+        lookback_start = cluster_time - timedelta(hours=self.ROLLING_VOLUME_WINDOW_HOURS)
+        
+        # Filter to only past clusters within the rolling window
+        relevant_clusters = []
+        for past_cluster in self.processed_clusters:
+            if lookback_start <= past_cluster['timestamp'] < cluster_time:
+                relevant_clusters.append(past_cluster)
+        
+        # Add current cluster for ranking
+        current_cluster = {
+            'timestamp': cluster_time,
+            'volume_ratio': cluster_volume_ratio
+        }
+        all_clusters = relevant_clusters + [current_cluster]
+        
+        # Require minimum clusters for meaningful ranking
+        if len(all_clusters) < self.MIN_CLUSTERS_FOR_RANKING:
+            return 1  # Default to rank 1 if insufficient history
+        
+        # Sort by volume ratio (descending) and find current cluster's rank
+        sorted_clusters = sorted(all_clusters, key=lambda x: x['volume_ratio'], reverse=True)
+        
+        for rank, cluster in enumerate(sorted_clusters, 1):
+            if cluster['timestamp'] == cluster_time:
+                return rank
+        
+        return len(sorted_clusters)  # Fallback
+    
+    def calculate_momentum(self, data: pd.DataFrame, timestamp: datetime, lookback_minutes: int = 5) -> float:
+        """Calculate 5-minute momentum before the signal"""
+        try:
+            # Get data from 5 minutes before the timestamp
+            start_time = timestamp - timedelta(minutes=lookback_minutes)
+            momentum_data = data[(data.index >= start_time) & (data.index < timestamp)]
+            
+            if len(momentum_data) < 2:
+                return 0.0
+            
+            # Calculate price change over the period
+            start_price = momentum_data['close'].iloc[0]
+            end_price = momentum_data['close'].iloc[-1]
+            
+            # Return momentum as percentage change
+            return (end_price - start_price) / start_price
+            
+        except Exception as e:
+            logger.warning(f"Error calculating momentum: {e}")
+            return 0.0
+    
+    def detect_real_time_volume_clusters(self, recent_data: pd.DataFrame) -> pd.DataFrame:
+        """
+        Real-time volume cluster detection - lightweight version for live trading
+        Returns DataFrame with detected clusters (much faster than batch analysis)
+        """
+        if len(recent_data) < 20:
+            return pd.DataFrame()
+        
+        try:
+            # Get current day's data only
+            current_time = recent_data.index[-1]
+            current_date = current_time.date()
+            
+            # Filter to current day only (real-time approach)
+            day_data = recent_data[recent_data.index.date == current_date]
+            
+            if len(day_data) < 15:  # Need minimum data
+                return pd.DataFrame()
+            
+            # Resample to 15-minute intervals for cluster detection
+            df_15m = day_data.resample('15min').agg({
+                'open': 'first',
+                'high': 'max', 
+                'low': 'min',
+                'close': 'last',
+                'volume': 'sum'
+            }).dropna()
+            
+            if len(df_15m) < 2:
+                return pd.DataFrame()
+            
+            # Calculate average 15-minute volume for this day
+            avg_15m_volume = df_15m['volume'].mean()
+            
+            # Set threshold based on volume multiplier
+            threshold = avg_15m_volume * self.VOLUME_THRESHOLD  # 4.0x
+            
+            # Find periods with volume above threshold
+            high_volume_periods = df_15m[df_15m['volume'] > threshold].copy()
+            
+            if high_volume_periods.empty:
+                return pd.DataFrame()
+            
+            # Calculate cluster strength (how many times above average)
+            high_volume_periods['cluster_strength'] = high_volume_periods['volume'] / avg_15m_volume
+            high_volume_periods['date'] = current_date
+            high_volume_periods['threshold'] = threshold
+            high_volume_periods['avg_volume'] = avg_15m_volume
+            
+            return high_volume_periods
+            
+        except Exception as e:
+            logger.error(f"Error in real-time cluster detection: {e}")
+            return pd.DataFrame()
+
+    def calculate_signal_strength_v3(self, modal_position: float, volume_ratio: float, momentum: float) -> float:
+        """Enhanced signal strength calculation matching V6 backtest logic"""
+        
+        # Direction gate (tightened V6 logic)
+        if modal_position <= self.TIGHT_LONG_THRESHOLD:
+            # Long signal - calculate position strength
+            position_strength = 1.0 - (modal_position / self.TIGHT_LONG_THRESHOLD)
+            direction = "long"
+        elif modal_position >= 0.85 and not self.ELIMINATE_SHORTS:
+            # Short signal - calculate position strength
+            position_strength = (modal_position - 0.85) / 0.15
+            direction = "short"
+        else:
+            # No valid signal
+            return 0.0
+        
+        # Volume strength (normalized to 0-1)
+        volume_strength = min(volume_ratio / 150.0, 1.0)
+        
+        # Momentum strength
+        if direction == "long":
+            momentum_strength = max(0, momentum * 8)
+        else:  # short
+            momentum_strength = max(0, -momentum * 8)
+        
+        momentum_strength = min(momentum_strength, 1.0)
+        
+        # Combined signal strength (weighted average: 50% position, 30% volume, 20% momentum)
+        combined_strength = (0.5 * position_strength + 0.3 * volume_strength + 0.2 * momentum_strength)
+        
+        return combined_strength
+    
+    def check_for_retests(self, current_data: pd.DataFrame) -> Optional[VolumeCluster]:
+        """
+        Check if any pending clusters have been retested
+        Returns the first cluster that meets retest criteria
+        """
+        if not self.pending_retests:
+            return None
+        
+        current_time = current_data.index[-1]
+        current_price = current_data['close'].iloc[-1]
+        
+        # Check each pending retest
+        for i, pending in enumerate(self.pending_retests):
+            cluster = pending['cluster']
+            signal_time = pending['signal_time']
+            modal_price = cluster.modal_price
+            
+            # Check if retest timeout has expired
+            time_elapsed = (current_time - signal_time).total_seconds() / 60  # minutes
+            if time_elapsed > self.RETEST_TIMEOUT_MINUTES:
+                logger.info(f"⏰ Retest timeout for cluster at {signal_time.strftime('%H:%M:%S')} - removing from pending")
+                self.pending_retests.pop(i)
+                continue
+            
+            # Check if current price is within retest tolerance of modal price
+            price_diff = abs(current_price - modal_price)
+            if price_diff <= self.RETEST_TOLERANCE:
+                logger.info(f"✅ RETEST CONFIRMED: Price ${current_price:.2f} within ±{self.RETEST_TOLERANCE} of modal ${modal_price:.2f}")
+                logger.info(f"   Time since signal: {time_elapsed:.1f} minutes")
+                
+                # Remove from pending retests
+                self.pending_retests.pop(i)
+                
+                # Update cluster with retest confirmation
+                cluster.timestamp = current_time  # Update to retest time
+                cluster.entry_price = current_price  # Update entry price
+                
+                return cluster
+        
+        return None
+    
     def detect_volume_cluster(self, recent_data: pd.DataFrame) -> Optional[VolumeCluster]:
-        """Detect volume clusters in real-time data"""
-        if len(recent_data) < 10:
+        """Detect volume clusters using proper V6 trading philosophy"""
+        if len(recent_data) < 20:  # Need more data for proper analysis
             return None
         
-        # Calculate volume ratio
-        current_volume = recent_data['volume'].iloc[-1]
-        avg_volume = recent_data['volume'].rolling(20).mean().iloc[-1]
-        volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0
-        
-        if volume_ratio < self.VOLUME_THRESHOLD:
+        try:
+            # Get current timestamp and ensure we have enough intraday data
+            current_time = recent_data.index[-1]
+            
+            # Reset daily clusters at market open
+            current_date = current_time.date()
+            if (not hasattr(self, 'last_date') or 
+                self.last_date != current_date or 
+                current_time.time() == self.market_open_time):
+                self.daily_clusters = []
+                self.last_date = current_date
+                logger.info(f"🗓️  Reset daily clusters for {current_date}")
+            
+            # Use lightweight real-time cluster detection
+            clusters_df = self.detect_real_time_volume_clusters(recent_data)
+            
+            if clusters_df.empty:
+                return None
+            
+            # Get the most recent cluster
+            latest_cluster_time = clusters_df.index[-1]
+            latest_cluster = clusters_df.iloc[-1]
+            
+            # Skip if we've already processed this cluster
+            if (self.last_cluster_time is not None and 
+                latest_cluster_time <= self.last_cluster_time):
+                return None
+            
+            # Calculate volume ratio for ranking
+            cluster_volume = latest_cluster['volume']
+            avg_volume = recent_data['volume'].mean()  # Day's average volume
+            volume_ratio = cluster_volume / avg_volume if avg_volume > 0 else 0
+            
+            # BIAS-FREE VOLUME RANKING: Only use past clusters
+            volume_rank = self.get_rolling_volume_rank(latest_cluster_time, volume_ratio)
+            
+            # Only trade if this cluster ranks in top-N based on PAST information only
+            if volume_rank > self.TOP_N_CLUSTERS_PER_DAY:
+                # Add to processed clusters for future ranking decisions
+                self.processed_clusters.append({
+                    'timestamp': latest_cluster_time,
+                    'volume_ratio': volume_ratio,
+                    'cluster_data': latest_cluster
+                })
+                return None
+            
+            # Analyze cluster price action (14-minute window after cluster start)
+            cluster_end = latest_cluster_time + timedelta(minutes=14)
+            cluster_slice = recent_data[
+                (recent_data.index >= latest_cluster_time) & 
+                (recent_data.index <= cluster_end)
+            ]
+            
+            if cluster_slice.empty or len(cluster_slice) < 3:
+                # Add to processed clusters even if we skip trading
+                self.processed_clusters.append({
+                    'timestamp': latest_cluster_time,
+                    'volume_ratio': volume_ratio,
+                    'cluster_data': latest_cluster
+                })
+                return None
+            
+            # Calculate modal price (mode of closes rounded to 2 decimals)
+            modal_price_series = cluster_slice["close"].round(2).mode()
+            if len(modal_price_series) == 0:
+                self.processed_clusters.append({
+                    'timestamp': latest_cluster_time,
+                    'volume_ratio': volume_ratio,
+                    'cluster_data': latest_cluster
+                })
+                return None
+            
+            modal_price = modal_price_series.iloc[0]
+            
+            # Calculate modal position (0→1) normalized within cluster window
+            price_low = cluster_slice["low"].min()
+            price_high = cluster_slice["high"].max()
+            
+            if price_high - price_low < 1e-9:  # Avoid division by zero
+                self.processed_clusters.append({
+                    'timestamp': latest_cluster_time,
+                    'volume_ratio': volume_ratio,
+                    'cluster_data': latest_cluster
+                })
+                return None
+            
+            modal_position = (modal_price - price_low) / (price_high - price_low)
+            
+            # Calculate 5-minute momentum before the cluster
+            momentum = self.calculate_momentum(recent_data, latest_cluster_time, lookback_minutes=5)
+            
+            # Calculate signal strength using V6 logic
+            signal_strength = self.calculate_signal_strength_v3(modal_position, volume_ratio, momentum)
+            
+            # Apply signal strength thresholds
+            if modal_position <= self.TIGHT_LONG_THRESHOLD:
+                direction = "long"
+                min_signal = self.MIN_SIGNAL_STRENGTH  # 0.45
+            elif modal_position >= 0.85 and not self.ELIMINATE_SHORTS:
+                direction = "short"
+                min_signal = self.SHORT_MIN_SIGNAL_STRENGTH  # 0.65
+            else:
+                # No valid signal - outside trading zones
+                self.processed_clusters.append({
+                    'timestamp': latest_cluster_time,
+                    'volume_ratio': volume_ratio,
+                    'cluster_data': latest_cluster
+                })
+                return None
+            
+            if signal_strength < min_signal:
+                self.processed_clusters.append({
+                    'timestamp': latest_cluster_time,
+                    'volume_ratio': volume_ratio,
+                    'cluster_data': latest_cluster
+                })
+                return None
+            
+            # Add to processed clusters
+            self.processed_clusters.append({
+                'timestamp': latest_cluster_time,
+                'volume_ratio': volume_ratio,
+                'cluster_data': latest_cluster
+            })
+            
+            # Get current price for entry
+            current_price = recent_data['close'].iloc[-1]
+            
+            # Create the cluster
+            cluster = VolumeCluster(
+                timestamp=latest_cluster_time,
+                volume_ratio=volume_ratio,
+                modal_price=modal_price,
+                modal_position=modal_position,
+                signal_strength=signal_strength,
+                direction=direction,
+                entry_price=current_price,
+                volume_rank=volume_rank
+            )
+            
+            logger.info(f"🎯 V6 Volume Cluster Detected: {direction.upper()} signal")
+            logger.info(f"   Volume Ratio: {volume_ratio:.1f}x, Rank: {volume_rank}")
+            logger.info(f"   Modal Position: {modal_position:.3f}, Signal Strength: {signal_strength:.3f}")
+            logger.info(f"   Modal Price: ${modal_price:.2f}, Current Price: ${current_price:.2f}")
+            
+            # Check if current price is already within retest tolerance
+            price_diff = abs(current_price - modal_price)
+            if price_diff <= self.RETEST_TOLERANCE:
+                logger.info(f"✅ IMMEDIATE RETEST: Price ${current_price:.2f} already within ±{self.RETEST_TOLERANCE} of modal ${modal_price:.2f}")
+                return cluster
+            else:
+                # Add to pending retests - wait for price to retest modal price
+                logger.info(f"⏳ WAITING FOR RETEST: Need price within ±{self.RETEST_TOLERANCE} of modal ${modal_price:.2f}")
+                logger.info(f"   Current price: ${current_price:.2f} (diff: {price_diff:.2f})")
+                
+                self.pending_retests.append({
+                    'cluster': cluster,
+                    'signal_time': current_time,
+                    'modal_price': modal_price
+                })
+                
+                return None  # Don't trade yet - wait for retest
+            
+        except Exception as e:
+            logger.error(f"❌ Error in volume cluster detection: {e}")
             return None
-        
-        # Calculate modal price (simplified)
-        recent_prices = recent_data['close'].tail(5)
-        modal_price = recent_prices.mode().iloc[0] if len(recent_prices.mode()) > 0 else recent_prices.mean()
-        
-        # Calculate signal strength (simplified)
-        price_range = recent_data['high'].tail(10).max() - recent_data['low'].tail(10).min()
-        signal_strength = min(volume_ratio / 10.0, 1.0)  # Normalize to 0-1
-        
-        if signal_strength < self.MIN_SIGNAL_STRENGTH:
-            return None
-        
-        # Determine direction based on price action
-        current_price = recent_data['close'].iloc[-1]
-        direction = "long" if current_price > modal_price else "short"
-        
-        return VolumeCluster(
-            timestamp=recent_data.index[-1],
-            volume_ratio=volume_ratio,
-            modal_price=modal_price,
-            signal_strength=signal_strength,
-            direction=direction,
-            entry_price=current_price,
-            volume_rank=1  # Simplified
-        )
     
     def generate_trading_recommendation(self, cluster: VolumeCluster) -> TradingRecommendation:
         """Generate trading recommendation based on V6 Bayesian strategy"""
         
-        # Calculate modal bin context (V6 method)
-        modal_position = abs(cluster.entry_price - cluster.modal_price) / cluster.entry_price
-        context_value = self.get_modal_bin_context(modal_position)
+        # Calculate modal bin context (V6 method) - use the normalized modal position from cluster
+        context_value = self.get_modal_bin_context(cluster.modal_position)
         
         # Get Bayesian multiplier with diagnostics
         bayesian_multiplier, diagnostics = self.bayesian_manager.calculate_bayesian_multiplier("modal_bin", context_value)
         
-        # Calculate position size using V6 logic
-        base_quantity = config.base_position_size
-        quantity = max(1, min(config.max_position_size, int(base_quantity * bayesian_multiplier)))
+        # Calculate position size using V6 logic with signal strength scaling
+        # Step 1: Base scaling by signal strength
+        signal_multiplier = 1.0 + (cluster.signal_strength * 0.3)  # 1.0 → 1.3x scaling
+        base_quantity_scaled = config.base_position_size * signal_multiplier
+        
+        # Step 2: Apply Bayesian multiplier 
+        total_multiplier = base_quantity_scaled * bayesian_multiplier
+        
+        # Step 3: Cap at maximum position size
+        quantity = max(1, min(config.max_position_size, int(total_multiplier)))
         
         # Calculate volatility for risk management (simplified - should use real calculation)
         volatility = 0.01  # 1% volatility per minute
@@ -603,6 +1000,9 @@ class RealTimeTradingSystem:
         # Get Bayesian confidence
         confidence = diagnostics.get('expected_p', 0.5)
         
+        # Calculate transaction costs
+        transaction_cost_pct = calculate_transaction_costs(quantity)
+        
         # Determine order type based on confidence and config
         if config.use_market_orders_on_high_confidence and confidence > config.high_confidence_threshold:
             order_type = "MARKET"
@@ -610,9 +1010,9 @@ class RealTimeTradingSystem:
             order_type = config.default_order_type
         
         # Generate detailed reasoning with V6 diagnostics
-        reasoning = f"V6 Bayesian: {cluster.volume_ratio:.1f}x volume, " \
-                   f"signal {cluster.signal_strength:.3f}, " \
-                   f"modal_bin[{context_value}] multiplier {bayesian_multiplier:.2f}x " \
+        reasoning = f"V6 Bayesian: {cluster.volume_ratio:.1f}x volume (rank #{cluster.volume_rank}), " \
+                   f"modal_pos {cluster.modal_position:.3f}, signal {cluster.signal_strength:.3f}, " \
+                   f"signal_mult {signal_multiplier:.2f}x, modal_bin[{context_value}] bayesian {bayesian_multiplier:.2f}x " \
                    f"(p={confidence:.3f}, trades={diagnostics.get('total_trades', 0)})"
         
         return TradingRecommendation(
@@ -628,6 +1028,7 @@ class RealTimeTradingSystem:
             bayesian_multiplier=bayesian_multiplier,
             stop_loss=stop_loss,
             profit_target=profit_target,
+            transaction_cost_pct=transaction_cost_pct,
             reasoning=reasoning
         )
     
@@ -662,6 +1063,7 @@ class RealTimeTradingSystem:
         print(f"   Stop Loss: ${rec.stop_loss:.2f}")
         print(f"   Profit Target: ${rec.profit_target:.2f}")
         print(f"   Risk/Reward: 1:{(rec.profit_target - rec.price) / (rec.price - rec.stop_loss):.2f}")
+        print(f"   Transaction Cost: {rec.transaction_cost_pct:.4f} ({rec.transaction_cost_pct*100:.3f}%)")
         print()
         print(f"💡 Reasoning: {rec.reasoning}")
         print()
@@ -751,6 +1153,7 @@ class RealTimeTradingSystem:
             'bayesian_multiplier': rec.bayesian_multiplier,
             'stop_loss': rec.stop_loss,
             'profit_target': rec.profit_target,
+            'transaction_cost_pct': rec.transaction_cost_pct,
             'reasoning': rec.reasoning,
             'volume_ratio': cluster.volume_ratio,
             'modal_price': cluster.modal_price,
@@ -776,14 +1179,11 @@ class RealTimeTradingSystem:
     def save_current_market_data(self, data: pd.DataFrame):
         """Save current market data for ticker display"""
         try:
-            logger.info(f"💾 save_current_market_data called with {len(data)} rows")
             if data.empty:
-                logger.info("💾 Data is empty, returning")
                 return
                 
             # Get the latest data point
             latest = data.iloc[-1]
-            logger.info(f"💾 Latest data point: {latest}")
             
             # Create market data dict for ticker
             market_data = {
@@ -803,22 +1203,17 @@ class RealTimeTradingSystem:
                 'reasoning': 'Live market data - no trading signal detected'
             }
             
-            logger.info(f"💾 Market data dict created: {market_data}")
-            
             # Ensure data directory exists
             os.makedirs(os.path.dirname(config.latest_recommendation_path), exist_ok=True)
-            logger.info(f"💾 Directory created: {os.path.dirname(config.latest_recommendation_path)}")
             
             # Save to latest recommendation file for ticker
             with open(config.latest_recommendation_path, 'w') as f:
                 json.dump(market_data, f, indent=2)
                 
-            logger.info(f"📊 Market data saved: ES.FUT @ ${market_data['price']:.2f}")
+            logger.debug(f"📊 Market data saved: ES.FUT @ ${market_data['price']:.2f}")
             
         except Exception as e:
             logger.error(f"❌ Error saving market data: {e}")
-            import traceback
-            logger.error(f"❌ Traceback: {traceback.format_exc()}")
 
 async def main():
     """Main entry point"""
