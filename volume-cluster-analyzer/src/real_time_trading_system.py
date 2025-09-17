@@ -1185,12 +1185,18 @@ class RealTimeTradingSystem:
             # Get the latest data point
             latest = data.iloc[-1]
             
+            # Calculate daily average volume for dashboard display (matches line 821 calculation)
+            current_date = latest.name.date() if hasattr(latest.name, 'date') else datetime.now().date()
+            day_data = self.current_data[self.current_data.index.date == current_date]
+            daily_avg_volume = int(day_data['volume'].mean()) if len(day_data) > 0 else int(latest['volume'])
+            
             # Create market data dict for ticker
             market_data = {
                 'timestamp': latest.name.isoformat() if hasattr(latest.name, 'isoformat') else str(latest.name),
                 'contract': 'ES.FUT',  # Generic ES futures
                 'price': float(latest['close']),
                 'volume': int(latest['volume']),
+                'daily_avg_volume': daily_avg_volume,  # For dashboard display only
                 'open': float(latest['open']),
                 'high': float(latest['high']),
                 'low': float(latest['low']),

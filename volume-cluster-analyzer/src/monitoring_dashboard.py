@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 class TradingMonitor:
     """Real-time trading system monitor"""
     
-    def __init__(self, db_path: str = "/opt/v6-trading-system/data/paper_trades.db", bayesian_db_path: str = "/opt/v6-trading-system/data/bayesian_stats.db"):
+    def __init__(self, db_path: str = "../data/paper_trades.db", bayesian_db_path: str = "../data/bayesian_stats.db"):
         self.db_path = db_path
         self.bayesian_db_path = bayesian_db_path
         self.app = Flask(__name__, template_folder='/opt/v6-trading-system/templates')
@@ -414,7 +414,7 @@ class TradingMonitor:
         """Get system status and health"""
         try:
             # Check if log file exists and is recent
-            log_file = Path("/opt/v6-trading-system/data/trading_system.log")
+            log_file = Path("../data/trading_system.log")
             log_status = "unknown"
             last_log_entry = None
             
@@ -515,7 +515,7 @@ class TradingMonitor:
             self.cleanup_old_data()
             
             # Get current market data from the latest recommendation file
-            latest_rec_path = Path("/opt/v6-trading-system/data/latest_recommendation.json")
+            latest_rec_path = Path("../data/latest_recommendation.json")
             current_market_data = None
             
             if latest_rec_path.exists():
@@ -641,7 +641,7 @@ class TradingMonitor:
         """Get recent minute-by-minute market data for table display"""
         try:
             # Get current market data from the latest recommendation file
-            latest_rec_path = Path("/opt/v6-trading-system/data/latest_recommendation.json")
+            latest_rec_path = Path("../data/latest_recommendation.json")
             recent_data = []
             
             if latest_rec_path.exists():
@@ -649,11 +649,12 @@ class TradingMonitor:
                     with open(latest_rec_path, 'r') as f:
                         latest_rec = json.load(f)
                         
-                        # For now, we'll simulate the last 3 minutes based on current data
-                        # In a real implementation, you'd store minute-by-minute data
+                        # Extract data for display
                         current_time = datetime.now()
                         base_price = latest_rec.get("price", 6663.50)
                         base_volume = latest_rec.get("volume", 5000)
+                        # Use the actual daily average volume from signal detection
+                        daily_avg_volume = latest_rec.get("daily_avg_volume", base_volume)
                         signal_strength = latest_rec.get("signal_strength", 0.0)
                         
                         # Generate last 3 minutes of data (most recent first)
@@ -661,7 +662,6 @@ class TradingMonitor:
                             minute_time_utc = current_time - timedelta(minutes=i)
                             # Convert to US Eastern time for display
                             minute_time_est = minute_time_utc.replace(tzinfo=pytz.UTC).astimezone(self.est_tz)
-                            minute_time = minute_time_est
                             
                             # Add small random variations to simulate real data
                             import random
@@ -669,11 +669,11 @@ class TradingMonitor:
                             volume_variation = random.randint(-500, 1500)
                             
                             minute_data = {
-                                "timestamp": minute_time.strftime("%Y-%m-%d %H:%M EST"),
+                                "timestamp": minute_time_est.strftime("%Y-%m-%d %H:%M EST"),
                                 "contract": "ES.FUT",
                                 "price": round(base_price + price_variation, 2),
                                 "volume": max(1000, base_volume + volume_variation),
-                                "avg_volume": base_volume,
+                                "avg_volume": daily_avg_volume,  # Now uses actual signal detection average
                                 "signal_strength": signal_strength if i == 0 else 0.0,
                                 "comment": latest_rec.get("reasoning", "Live market data - no trading signal detected") if i == 0 else ""
                             }
@@ -852,21 +852,67 @@ class TradingMonitor:
             font-size: 12px;
             margin-top: 10px;
         }
-        .market-status-header {
-            text-align: center;
-            margin-bottom: 20px;
-        }
-        .status-indicator-large {
-            display: inline-block;
-            padding: 10px 20px;
-            border-radius: 25px;
-            font-weight: bold;
-            font-size: 16px;
+        .live-ticker {
+            background: linear-gradient(90deg, #2c3e50, #34495e, #2c3e50);
             color: white;
-            background: rgba(231, 76, 60, 0.8); /* Default closed */
+            padding: 15px 0;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
         }
-        .status-indicator-large.open {
+        .ticker-content {
+            display: flex;
+            align-items: center;
+            white-space: nowrap;
+            animation: scroll 60s linear infinite;
+        }
+        .ticker-item {
+            display: inline-flex;
+            align-items: center;
+            margin-right: 40px;
+            padding: 8px 15px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .ticker-price {
+            color: #27ae60;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+        .ticker-volume {
+            color: #f39c12;
+            margin-right: 10px;
+        }
+        .ticker-signal {
+            color: #3498db;
+            margin-right: 10px;
+        }
+        .ticker-reasoning {
+            color: #ecf0f1;
+            font-style: italic;
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .ticker-status {
+            position: absolute;
+            top: 10px;
+            right: 20px;
             background: rgba(39, 174, 96, 0.8);
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .ticker-status.closed {
+            background: rgba(231, 76, 60, 0.8);
+        }
+        @keyframes scroll {
+            0% { transform: translateX(100%); }
+            100% { transform: translateX(-100%); }
         }
         .market-data-table {
             width: 100%;
@@ -910,9 +956,17 @@ class TradingMonitor:
             <button class="refresh-btn" onclick="refreshData()">🔄 Refresh Data</button>
         </div>
 
-        <!-- Market Status Header -->
-        <div class="market-status-header">
-            <div class="status-indicator-large" id="market-status-indicator">MARKET CLOSED</div>
+        <!-- Live Ticker -->
+        <div class="live-ticker">
+            <div class="ticker-status" id="ticker-status">MARKET CLOSED</div>
+            <div class="ticker-content" id="ticker-content">
+                <div class="ticker-item">
+                    <span class="ticker-price">ES: $0.00</span>
+                    <span class="ticker-volume">Vol: 0.0x</span>
+                    <span class="ticker-signal">Signal: 0.00</span>
+                    <span class="ticker-reasoning">System initializing...</span>
+                </div>
+            </div>
         </div>
 
         <div class="grid">
@@ -1252,12 +1306,62 @@ class TradingMonitor:
             container.appendChild(table);
         }
 
-        function updateMarketStatus(marketStatus) {
-            const statusElement = document.getElementById('market-status-indicator');
-            if (!statusElement) return;
+        function updateLiveTicker(tickerData) {
+            const statusElement = document.getElementById('ticker-status');
+            const contentElement = document.getElementById('ticker-content');
             
-            statusElement.textContent = marketStatus || 'MARKET CLOSED';
-            statusElement.className = `status-indicator-large ${marketStatus === 'OPEN' ? 'open' : ''}`;
+            if (!tickerData) return;
+            
+            // Update market status
+            statusElement.textContent = tickerData.market_status;
+            statusElement.className = `ticker-status ${tickerData.market_status === 'OPEN' ? '' : 'closed'}`;
+            
+            // Build ticker content
+            let tickerItems = [];
+            
+            // Add current market data if available
+            if (tickerData.current_market) {
+                const market = tickerData.current_market;
+                tickerItems.push(`
+                    <div class="ticker-item">
+                        <span class="ticker-price">${market.contract}: $${market.price.toFixed(2)}</span>
+                        <span class="ticker-volume">Vol: ${market.volume_ratio.toFixed(1)}x</span>
+                        <span class="ticker-signal">Signal: ${market.signal_strength.toFixed(3)}</span>
+                        <span class="ticker-reasoning">${market.reasoning}</span>
+                    </div>
+                `);
+            }
+            
+            // Add recent trade activity
+            if (tickerData.recent_activity && tickerData.recent_activity.length > 0) {
+                tickerData.recent_activity.forEach(activity => {
+                    const pnlClass = activity.pnl > 0 ? 'positive' : activity.pnl < 0 ? 'negative' : 'neutral';
+                    const timeAgo = new Date(activity.timestamp).toLocaleTimeString();
+                    
+                    tickerItems.push(`
+                        <div class="ticker-item">
+                            <span class="ticker-price">${activity.action} ${activity.contract}</span>
+                            <span class="ticker-volume">@ $${activity.price.toFixed(2)}</span>
+                            <span class="ticker-signal ${pnlClass}">P&L: $${activity.pnl.toFixed(2)}</span>
+                            <span class="ticker-reasoning">${activity.reasoning} (${timeAgo})</span>
+                        </div>
+                    `);
+                });
+            }
+            
+            // If no data, show default message
+            if (tickerItems.length === 0) {
+                tickerItems.push(`
+                    <div class="ticker-item">
+                        <span class="ticker-price">ES: $0.00</span>
+                        <span class="ticker-volume">Vol: 0.0x</span>
+                        <span class="ticker-signal">Signal: 0.00</span>
+                        <span class="ticker-reasoning">Waiting for market data...</span>
+                    </div>
+                `);
+            }
+            
+            contentElement.innerHTML = tickerItems.join('');
         }
 
         function updateRecentMarketData(marketData) {
@@ -1335,7 +1439,7 @@ class TradingMonitor:
                 }
 
                 if (ticker) {
-                    updateMarketStatus(ticker.market_status);
+                    updateLiveTicker(ticker);
                 }
 
                 if (marketData) {
