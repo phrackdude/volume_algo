@@ -139,7 +139,19 @@ class DatabentoConnector:
                 # Check for OHLCV records (they don't have schema attribute)
                 if hasattr(record, 'close') and hasattr(record, 'volume'):
                     logger.info(f"📊 Processing OHLCV record: {type(record).__name__}")
-                    logger.info(f"📈 OHLCV data: Close={record.close / 1e9:.2f}, Volume={record.volume}")
+                    
+                    # Apply Databento price scaling
+                    scaled_close = record.close / 1e9
+                    logger.info(f"📈 OHLCV data: Close={scaled_close:.2f}, Volume={record.volume}")
+                    
+                    # CRITICAL FIX: Filter out wrong ES contracts by price range
+                    # Main ES futures should be in range $3000-$8000 (typical range)
+                    # Filter out mini contracts, spreads, and other instruments
+                    if not (3000 <= scaled_close <= 8000):
+                        logger.info(f"🚫 FILTERED OUT: Price ${scaled_close:.2f} outside main ES range (3000-8000)")
+                        return  # Skip this record
+                    
+                    logger.info(f"✅ ACCEPTED: Main ES contract data - Close=${scaled_close:.2f}")
                     
                     # Convert to DataFrame format
                     data_row = pd.DataFrame({
