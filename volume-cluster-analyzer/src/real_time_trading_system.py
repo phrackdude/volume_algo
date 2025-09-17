@@ -850,6 +850,11 @@ class RealTimeTradingSystem:
                 })
                 return None
             
+            # DEBUG: Log cluster slice data to diagnose modal price issue
+            logger.info(f"🔍 DEBUG Cluster slice: {len(cluster_slice)} bars from {latest_cluster_time} to {cluster_end}")
+            logger.info(f"   Price range: ${cluster_slice['close'].min():.2f} - ${cluster_slice['close'].max():.2f}")
+            logger.info(f"   Close prices: {cluster_slice['close'].round(2).tolist()}")
+            
             # Calculate modal price (mode of closes rounded to 2 decimals)
             modal_price_series = cluster_slice["close"].round(2).mode()
             if len(modal_price_series) == 0:
@@ -861,6 +866,7 @@ class RealTimeTradingSystem:
                 return None
             
             modal_price = modal_price_series.iloc[0]
+            logger.info(f"   Modal price calculated: ${modal_price:.2f} (from {len(modal_price_series)} modes)")
             
             # Calculate modal position (0→1) normalized within cluster window
             price_low = cluster_slice["low"].min()
