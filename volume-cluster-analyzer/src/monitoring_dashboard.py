@@ -658,7 +658,10 @@ class TradingMonitor:
                         
                         # Generate last 3 minutes of data (most recent first)
                         for i in range(minutes):
-                            minute_time = current_time - timedelta(minutes=i)
+                            minute_time_utc = current_time - timedelta(minutes=i)
+                            # Convert to US Eastern time for display
+                            minute_time_est = minute_time_utc.replace(tzinfo=pytz.UTC).astimezone(self.est_tz)
+                            minute_time = minute_time_est
                             
                             # Add small random variations to simulate real data
                             import random
@@ -666,7 +669,7 @@ class TradingMonitor:
                             volume_variation = random.randint(-500, 1500)
                             
                             minute_data = {
-                                "timestamp": minute_time.strftime("%Y-%m-%d %H:%M"),
+                                "timestamp": minute_time.strftime("%Y-%m-%d %H:%M EST"),
                                 "contract": "ES.FUT",
                                 "price": round(base_price + price_variation, 2),
                                 "volume": max(1000, base_volume + volume_variation),
@@ -681,11 +684,13 @@ class TradingMonitor:
             
             # If no data available, create placeholder data
             if not recent_data:
-                current_time = datetime.now()
+                current_time_utc = datetime.now()
                 for i in range(minutes):
-                    minute_time = current_time - timedelta(minutes=i)
+                    minute_time_utc = current_time_utc - timedelta(minutes=i)
+                    # Convert to US Eastern time for display
+                    minute_time_est = minute_time_utc.replace(tzinfo=pytz.UTC).astimezone(self.est_tz)
                     minute_data = {
-                        "timestamp": minute_time.strftime("%Y-%m-%d %H:%M"),
+                        "timestamp": minute_time_est.strftime("%Y-%m-%d %H:%M EST"),
                         "contract": "ES.FUT", 
                         "price": 6663.50,
                         "volume": 5000,
