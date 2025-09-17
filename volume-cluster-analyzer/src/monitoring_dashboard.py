@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 class TradingMonitor:
     """Real-time trading system monitor"""
     
-    def __init__(self, db_path: str = "../data/paper_trades.db", bayesian_db_path: str = "../data/bayesian_stats.db"):
+    def __init__(self, db_path: str = "/opt/v6-trading-system/data/paper_trades.db", bayesian_db_path: str = "/opt/v6-trading-system/data/bayesian_stats.db"):
         self.db_path = db_path
         self.bayesian_db_path = bayesian_db_path
         self.app = Flask(__name__, template_folder='/opt/v6-trading-system/templates')
@@ -414,7 +414,7 @@ class TradingMonitor:
         """Get system status and health"""
         try:
             # Check if log file exists and is recent
-            log_file = Path("../data/trading_system.log")
+            log_file = Path("/opt/v6-trading-system/data/trading_system.log")
             log_status = "unknown"
             last_log_entry = None
             
@@ -515,7 +515,7 @@ class TradingMonitor:
             self.cleanup_old_data()
             
             # Get current market data from the latest recommendation file
-            latest_rec_path = Path("../data/latest_recommendation.json")
+            latest_rec_path = Path("/opt/v6-trading-system/data/latest_recommendation.json")
             current_market_data = None
             
             if latest_rec_path.exists():
@@ -641,7 +641,7 @@ class TradingMonitor:
         """Get recent minute-by-minute market data for table display"""
         try:
             # Get current market data from the latest recommendation file
-            latest_rec_path = Path("../data/latest_recommendation.json")
+            latest_rec_path = Path("/opt/v6-trading-system/data/latest_recommendation.json")
             recent_data = []
             
             if latest_rec_path.exists():

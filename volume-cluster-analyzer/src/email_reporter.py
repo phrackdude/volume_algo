@@ -31,8 +31,8 @@ class EmailReporter:
         self.email_password = config.get('email_password')
         self.recipients = config.get('recipients', [])
         
-        self.db_path = config.get('db_path', '../data/paper_trades.db')
-        self.bayesian_db_path = config.get('bayesian_db_path', '../data/bayesian_stats.db')
+        self.db_path = config.get('db_path', '/opt/v6-trading-system/data/paper_trades.db')
+        self.bayesian_db_path = config.get('bayesian_db_path', '/opt/v6-trading-system/data/bayesian_stats.db')
         
         # Validate configuration
         if not self.email_address or not self.email_password:
