@@ -1,0 +1,33 @@
+# V6 Bayesian Real-Time Trading System Requirements
+# Install with: pip install -r requirements_realtime.txt
+
+# Core data processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Real-time data feed
+databento>=0.29.0
+
+# Database for Bayesian statistics
+sqlite3  # Built into Python, no separate install needed
+
+# Async programming
+asyncio  # Built into Python
+
+# Data visualization (optional, for monitoring)
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Logging and utilities
+tqdm>=4.65.0
+
+# Testing and development
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+
+# Optional: Web interface for monitoring (Phase 4)
+flask>=2.3.0
+plotly>=5.15.0
+
+# Optional: Enhanced numerical computing
+scipy>=1.10.0 
