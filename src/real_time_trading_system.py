@@ -816,10 +816,23 @@ class RealTimeTradingSystem:
                 latest_cluster_time <= self.last_cluster_time):
                 return None
             
-            # Calculate volume ratio for ranking
-            cluster_volume = latest_cluster['volume']
-            avg_volume = recent_data['volume'].mean()  # Day's average volume
-            volume_ratio = cluster_volume / avg_volume if avg_volume > 0 else 0
+            # Calculate volume ratio for ranking (MATCH BACKTEST EXACTLY)
+            # Backtest uses: 15-minute cluster volume / minute-by-minute daily average
+            cluster_volume = latest_cluster['volume']  # This is 15-minute summed volume
+            
+            # Get current day's minute-by-minute data (like backtest)
+            current_date = latest_cluster_time.date()
+            day_data = recent_data[recent_data.index.date == current_date]
+            
+            # Use daily average MINUTE volume (matching backtest exactly)
+            if len(day_data) > 0:
+                avg_minute_volume = day_data['volume'].mean()  # Minute-by-minute daily average
+            else:
+                avg_minute_volume = recent_data['volume'].mean()  # Fallback
+                
+            volume_ratio = cluster_volume / avg_minute_volume if avg_minute_volume > 0 else 0
+            
+            logger.debug(f"📊 Volume calc: 15min_cluster={cluster_volume:,}, daily_minute_avg={avg_minute_volume:,.0f}, ratio={volume_ratio:.1f}x")
             
             # BIAS-FREE VOLUME RANKING: Only use past clusters
             volume_rank = self.get_rolling_volume_rank(latest_cluster_time, volume_ratio)
